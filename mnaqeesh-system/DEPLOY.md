@@ -1,10 +1,18 @@
 # النشر على الإنترنت — خطوات مبسّطة ومجانية
 
+> ## ⚠️ هذه الوثيقة تصف بنية قديمة (سيرفر Next.js على Vercel)
+>
+> الموقع أصبح **تطبيقًا ثابتًا** يُستضاف على GitHub Pages أو Firebase Hosting دون
+> أي سيرفر ومفتاح الخدمة خرج من الموقع كليًا. للنشر على المنصتين الجديدتين اتبع
+> **[HOSTING.md](./HOSTING.md)**. هذه الصفحة تبقى مرجعًا تاريخيًا لبنية Vercel
+> القديمة، ويبقى مفيدًا منها فقط: شرح ربط Google OAuth وتوزيع الإضافة
+> (مع تغيير عنواني `siteUrl` و`ALLOWED_HOSTS` لنطاقك الجديد).
+
 النظام كله مجاني بالكامل على الحدود المجانية لـ **Supabase** و **Vercel**، ولا يحتاج أي سيرفر أو دفع.
 
 > ## ⚠️ اقرأ هذا أولًا — الجدول الحالي مكشوف
 >
-> فحصتُ مشروع Supabase الحالي (`xmxcdionvhshvtvsdauu`) ووجدت أن جدول `posts` **موجود بالفعل
+> فحصتُ مشروع Supabase الحالي (`czgxygcjyvfkhsuoearu`) ووجدت أن جدول `posts` **موجود بالفعل
 > لكنه غير محمي إطلاقًا**:
 >
 > | ما جرّبته بالمفتاح العام (الموجود داخل الإضافة) | النتيجة |
@@ -43,11 +51,16 @@
 
 ## الخطوة 1 — قاعدة البيانات (Supabase) — عاجلة
 
-المشروع موجود وشغّال لأن الإضافة تشير إليه: `xmxcdionvhshvtvsdauu.supabase.co`
+المشروع موجود وشغّال لأن الإضافة تشير إليه: `czgxygcjyvfkhsuoearu.supabase.co`
 
-1. افتح [supabase.com](https://supabase.com) → اختر المشروع `xmxcdionvhshvtvsdauu`.
+1. افتح [supabase.com](https://supabase.com) → اختر المشروع `czgxygcjyvfkhsuoearu`.
 2. من القائمة الجانبية: **SQL Editor** → **New query**.
 3. افتح ملف `supabase/migrations/0001_mnaqeesh.sql` وانسخ **كل** محتواه والصقه، ثم اضغط **Run**.
+4. كرر الخطوة نفسها مع بقية ملفات الترحيل بالترتيب:
+   `0002_post_content_editor.sql`، `0003_post_status_states.sql`،
+   `0004_role_permissions.sql`، `0005_restore_deleted_on_resync.sql`،
+   `0006_site_settings.sql`. كل ملف آمن للتشغيل أكثر من مرة، و`0006` هو ما
+   يُفعّل تبويب **الإعدادات** (مظهر الموقع).
 
 ما الذي ستفعله هذه الخطوة:
 
@@ -76,7 +89,7 @@
    - **Credentials** → **Create Credentials** → **OAuth client ID** → نوعه **Web application**.
    - في **Authorized redirect URIs** أضف:
      ```
-     https://xmxcdionvhshvtvsdauu.supabase.co/auth/v1/callback
+     https://czgxygcjyvfkhsuoearu.supabase.co/auth/v1/callback
      ```
    - انسخ الـ Client ID و Client Secret إلى Supabase.
 
@@ -91,12 +104,13 @@
 
 | الاسم | القيمة |
 |---|---|
-| `NEXT_PUBLIC_SUPABASE_URL` | `https://xmxcdionvhshvtvsdauu.supabase.co` |
-| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | `sb_publishable_7RDGcclPD02zao2n2awHCw_hcSwg1sd` |
+| `NEXT_PUBLIC_SUPABASE_URL` | `https://czgxygcjyvfkhsuoearu.supabase.co` |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | المفتاح العام من Supabase ← Project Settings → API |
 | `SUPABASE_SERVICE_ROLE_KEY` | مفتاح الخدمة من Supabase ← Project Settings → API |
 
 > ثلاثة متغيرات فقط، لا أكثر.
 > `SUPABASE_SERVICE_ROLE_KEY` **سري**: لا تضعه في GitHub ولا داخل الإضافة أبدًا.
+> يوجد متغير اختياري رابع: `EXPORT_ROW_LIMIT` يرفع سقف عدد صفوف التصدير (افتراضي 20000، بحد أقصى 100000).
 
 5. اضغط **Deploy** وانتظر دقيقة. ستحصل على رابط مثل `https://mnaqeesh.vercel.app`.
 

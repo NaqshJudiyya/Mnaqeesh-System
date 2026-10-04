@@ -112,7 +112,7 @@ function buildWorksheetXml(rows: XlsxRow[]): string {
   );
 }
 
-export function buildXlsx(rows: XlsxRow[], sheetName = 'Facebook Posts'): Buffer {
+export async function buildXlsx(rows: XlsxRow[], sheetName = 'Facebook Posts'): Promise<Uint8Array> {
   const contentTypes =
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n` +
     `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">` +
@@ -169,7 +169,6 @@ export function buildXlsx(rows: XlsxRow[], sheetName = 'Facebook Posts'): Buffer
 
   return buildZip(files);
 }
-
 /** Converts a post into the 9-column export shape (source language). */
 export function postToXlsxRow(post: PostRow): XlsxRow {
   return {

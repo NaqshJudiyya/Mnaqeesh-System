@@ -148,6 +148,25 @@ export function canDeletePost(profile: ActorCarrier, post: { user_id: string }):
   return canEditPost(profile, post);
 }
 
+/** Who may bring a soft-deleted post back from the trash. Same rule as deleting it. */
+export function canRestorePost(profile: ActorCarrier, post: { user_id: string }): boolean {
+  return canDeletePost(profile, post);
+}
+
+/**
+ * Who may change صاحب البوست — the Facebook account a post is attributed
+ * to (the `author` column). This is a data-correction power over the
+ * archive's metadata, so it belongs to the manager alone.
+ *
+ * NOTE: the SYSTEM member who saved the post (`user_id`) is a different
+ * thing and is immutable for everyone — the database trigger
+ * `posts_owner_immutable` (migration 0001) rejects any change, and no
+ * dashboard route accepts it.
+ */
+export function canChangePostAuthor(profile: RoleCarrier): boolean {
+  return isAdmin(profile);
+}
+
 /**
  * Who may create and change translations.
  *

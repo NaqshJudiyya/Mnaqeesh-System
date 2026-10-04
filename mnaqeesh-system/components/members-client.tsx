@@ -1,7 +1,6 @@
 'use client';
 
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
 import {
   ROLE_LABELS,
   ROLE_SHORT_LABELS,
@@ -10,11 +9,21 @@ import {
   type Role,
   type Status
 } from '@/lib/rbac';
+import {
+  createMember,
+  setMemberPassword,
+  switchBackToOrigin,
+  switchToMember,
+  updateMember
+} from '@/lib/client/members';
+import { appPath } from '@/lib/client/paths';
 import Modal from '@/components/modal';
 
 type Member = Profile & { post_count?: number };
 
 type Props = {
+  /** The signed-in manager (the page is admin-gated). */
+  viewer: Profile;
   currentUserId: string;
   initialMembers: Member[];
   /** True when this session was entered through "switch account". */
@@ -24,12 +33,12 @@ type Props = {
 };
 
 export default function MembersClient({
+  viewer,
   currentUserId,
   initialMembers,
   isImpersonating,
   originEmail
 }: Props) {
-  const router = useRouter();
   const [members, setMembers] = useState<Member[]>(initialMembers);
   const [busyId, setBusyId] = useState('');
   const [error, setError] = useState('');
@@ -50,25 +59,21 @@ export default function MembersClient({
   const [switchPassword, setSwitchPassword] = useState('');
   const [switchBusy, setSwitchBusy] = useState(false);
 
+  // Set-password modal (lets Google-only members become switchable)
+  const [passwordTarget, setPasswordTarget] = useState<Member | null>(null);
+  const [newMemberPassword, setNewMemberPassword] = useState('');
+  const [passwordBusy, setPasswordBusy] = useState(false);
+
   async function update(memberId: string, patch: { role?: Role; status?: Status }) {
     setBusyId(memberId);
     setError('');
     setNotice('');
     try {
-      const response = await fetch(`/api/members/${memberId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(patch)
-      });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || 'تعذر تحديث العضو.');
-
+      const updated = await updateMember(viewer, memberId, patch);
       setMembers((current) =>
-        current.map((member) => (member.id === memberId ? { ...member, ...payload.member } : member))
+        current.map((member) => (member.id === memberId ? { ...member, ...updated } : member))
       );
       setNotice('تم تحديث بيانات العضو.');
-      // The KPI cards are rendered on the server, so refresh their numbers.
-      router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'تعذر تحديث العضو.');
     } finally {
@@ -76,32 +81,39 @@ export default function MembersClient({
     }
   }
 
-  async function createMember() {
+  async function createMemberAction() {
     setCreateBusy(true);
     setError('');
     setNotice('');
     setCreatedLogin(null);
     try {
-      const response = await fetch('/api/members/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          username: newUsername,
-          fullName: newFullName,
-          password: newPassword,
-          role: newRole,
-          status: 'active'
-        })
+      const payload = await createMember({
+        username: newUsername.trim(),
+        email: '',
+        fullName: newFullName,
+        password: newPassword,
+        role: newRole,
+        status: 'active'
       });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || 'تعذر إنشاء العضو.');
 
       setCreatedLogin({ email: payload.member.email, password: newPassword });
       setNotice(`تم إنشاء العضو ${payload.member.full_name}. سلّمه بيانات الدخول أدناه.`);
       setNewUsername('');
       setNewFullName('');
       setNewPassword('');
-      router.refresh();
+      // Add the new member to the list immediately.
+      setMembers((current) => [
+        {
+          id: payload.member.id,
+          email: payload.member.email,
+          full_name: payload.member.full_name,
+          avatar_url: '',
+          role: payload.member.role,
+          status: payload.member.status,
+          post_count: 0
+        },
+        ...current
+      ]);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'تعذر إنشاء العضو.');
     } finally {
@@ -114,19 +126,18 @@ export default function MembersClient({
     setSwitchBusy(true);
     setError('');
     try {
-      const response = await fetch('/api/members/switch', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          targetUserId: switchTarget.id,
-          password: switchPassword,
-          owner: currentUserId
-        })
-      });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || 'تعذر تبديل الحساب.');
-      // Full reload so the server components pick up the new session.
-      window.location.href = '/dashboard';
+      const { createClient } = await import('@/lib/supabase/client');
+      const { data: profileData } = await createClient()
+        .from('profiles')
+        .select('email,full_name')
+        .eq('id', switchTarget.id)
+        .maybeSingle();
+      const targetEmail = (profileData as { email?: string } | null)?.email ?? switchTarget.email;
+      if (!targetEmail) throw new Error('لا يمكن قراءة بيانات هذا العضو.');
+
+      await switchToMember(targetEmail, switchPassword);
+      // Full reload so every piece of UI picks up the new session.
+      window.location.href = appPath('/dashboard');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'تعذر تبديل الحساب.');
       setSwitchBusy(false);
@@ -136,16 +147,26 @@ export default function MembersClient({
   async function switchBack() {
     setError('');
     try {
-      const response = await fetch('/api/members/switch', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ owner: currentUserId })
-      });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || 'تعذر العودة للحساب الأصلي.');
-      window.location.href = '/dashboard';
+      await switchBackToOrigin();
+      window.location.href = appPath('/dashboard');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'تعذر العودة للحساب الأصلي.');
+    }
+  }
+
+  async function setMemberPasswordAction() {
+    if (!passwordTarget) return;
+    setPasswordBusy(true);
+    setError('');
+    try {
+      await setMemberPassword(passwordTarget.id, newMemberPassword);
+      setNotice(`تم تعيين كلمة مرور ${passwordTarget.full_name || passwordTarget.email}. يمكنك الآن التبديل إلى حسابه بها.`);
+      setPasswordTarget(null);
+      setNewMemberPassword('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'تعذر تعيين كلمة المرور.');
+    } finally {
+      setPasswordBusy(false);
     }
   }
 
@@ -265,6 +286,14 @@ export default function MembersClient({
                             ⇄ تبديل
                           </button>
                         )}
+                        <button
+                          className="btn secondary small"
+                          disabled={busy}
+                          title="تعيين أو تغيير كلمة مرور هذا العضو"
+                          onClick={() => { setPasswordTarget(member); setNewMemberPassword(''); setError(''); }}
+                        >
+                          🔑 كلمة مرور
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -367,7 +396,7 @@ export default function MembersClient({
           <button className="btn secondary" onClick={() => setShowCreate(false)}>إغلاق</button>
           <button
             className="btn"
-            onClick={createMember}
+            onClick={createMemberAction}
             disabled={createBusy || !newUsername.trim() || newPassword.length < 8}
           >
             {createBusy ? 'جارٍ الإنشاء…' : 'إنشاء العضو'}
@@ -383,8 +412,8 @@ export default function MembersClient({
         onClose={() => setSwitchTarget(null)}
       >
         <div className="notice warn">
-          أدخل كلمة مرور هذا العضو للدخول بحسابه. الأعضاء الذين دخلوا بحساب Google ليس لهم كلمة مرور،
-          لذا يلزم تعيين كلمة مرور لهم أولًا.
+          أدخل كلمة مرور هذا العضو للدخول بحسابه. الأعضاء الذين دخلوا بحساب Google ليس لهم كلمة مرور —
+          استخدم زر <strong>«🔑 كلمة مرور»</strong> لتعيين واحدة لهم أولًا.
         </div>
 
         <div className="field">
@@ -412,6 +441,50 @@ export default function MembersClient({
             {switchBusy ? 'جارٍ التبديل…' : 'دخول بهذا الحساب'}
           </button>
         </div>
+      </Modal>
+
+      {/* ---------------- set member password ---------------- */}
+      <Modal
+        open={passwordTarget !== null}
+        title="تعيين كلمة مرور"
+        subtitle={passwordTarget ? `لحساب ${passwordTarget.full_name || passwordTarget.email}` : undefined}
+        onClose={() => { if (!passwordBusy) setPasswordTarget(null); }}
+      >
+        {passwordTarget && (
+          <>
+            <div className="notice">
+              مفيد للأعضاء الذين دخلوا بحساب Google (ليس لهم كلمة مرور)، أو عند نسيان كلمة المرور.
+              بعد التعيين يمكن الدخول بالبريد <strong dir="ltr">{passwordTarget.email}</strong> وكلمة المرور الجديدة.
+            </div>
+
+            <div className="field">
+              <label htmlFor="mp-pass">كلمة المرور الجديدة</label>
+              <input
+                id="mp-pass"
+                className="input"
+                style={{ width: '100%' }}
+                dir="ltr"
+                type="text"
+                autoComplete="off"
+                value={newMemberPassword}
+                onChange={(event) => setNewMemberPassword(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && newMemberPassword.length >= 8) void setMemberPasswordAction();
+                }}
+                placeholder="8 أحرف على الأقل"
+              />
+            </div>
+
+            <div className="modal-foot" style={{ margin: '16px -18px -16px', borderRadius: '0 0 14px 14px' }}>
+              <button className="btn secondary" onClick={() => setPasswordTarget(null)} disabled={passwordBusy}>
+                إلغاء
+              </button>
+              <button className="btn" onClick={setMemberPasswordAction} disabled={passwordBusy || newMemberPassword.length < 8}>
+                {passwordBusy ? 'جارٍ التعيين…' : 'تعيين كلمة المرور'}
+              </button>
+            </div>
+          </>
+        )}
       </Modal>
     </>
   );

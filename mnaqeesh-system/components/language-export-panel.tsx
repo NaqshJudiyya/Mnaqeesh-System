@@ -2,10 +2,13 @@
 
 import { useMemo, useState } from 'react';
 import type { LanguageRow } from '@/lib/types';
+import type { Profile } from '@/lib/rbac';
+import { runExport } from '@/lib/client/export';
 
 type Member = { id: string; full_name: string; email: string };
 
 type Props = {
+  viewer: Profile;
   languages: LanguageRow[];
   translationCounts: Record<string, number>;
   totalPosts: number;
@@ -14,7 +17,7 @@ type Props = {
   canPickMember: boolean;
 };
 
-const FORMATS: { value: string; label: string; ext: string }[] = [
+const FORMATS: { value: 'xlsx' | 'csv' | 'json' | 'markdown' | 'wxr'; label: string; ext: string }[] = [
   { value: 'xlsx', label: 'Excel', ext: 'xlsx' },
   { value: 'csv', label: 'CSV', ext: 'csv' },
   { value: 'json', label: 'JSON', ext: 'json' },
@@ -22,7 +25,7 @@ const FORMATS: { value: string; label: string; ext: string }[] = [
   { value: 'wxr', label: 'WordPress', ext: 'xml' }
 ];
 
-const GROUPINGS: { value: string; label: string; hint: string }[] = [
+const GROUPINGS: { value: 'all' | 'year' | 'month' | 'account'; label: string; hint: string }[] = [
   { value: 'all', label: 'ملف واحد — الكل', hint: 'كل المنشورات في ملف واحد' },
   { value: 'year', label: 'ملف لكل سنة', hint: 'ملف مستقل لكل سنة' },
   { value: 'month', label: 'ملف لكل شهر', hint: 'ملف مستقل لكل شهر' },
@@ -44,7 +47,7 @@ function isoDate(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
 
-/** Turns a preset into the `from`/`to` pair the API understands. */
+/** Turns a preset into the `from`/`to` pair the export understands. */
 function periodRange(preset: string, customFrom: string, customTo: string): { from: string; to: string } {
   const now = new Date();
   switch (preset) {
@@ -83,9 +86,11 @@ function periodRange(preset: string, customFrom: string, customTo: string): { fr
  *   3. WHAT — one language only (or the Arabic source)
  *   4. HOW  — a single file, or one file per year / month / account
  *
- * A split export is returned as a ZIP so the manager gets one download.
+ * The files are built IN THE BROWSER from rows fetched through RLS and
+ * downloaded directly — a split export is zipped client-side.
  */
 export default function LanguageExportPanel({
+  viewer,
   languages,
   translationCounts,
   totalPosts,
@@ -95,10 +100,13 @@ export default function LanguageExportPanel({
   const [open, setOpen] = useState(false);
   const [scope, setScope] = useState('source');
   const [owner, setOwner] = useState('');
-  const [group, setGroup] = useState('all');
+  const [group, setGroup] = useState<'all' | 'year' | 'month' | 'account'>('all');
   const [period, setPeriod] = useState('');
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
 
   const { from, to } = periodRange(period, customFrom, customTo);
 
@@ -115,26 +123,35 @@ export default function LanguageExportPanel({
   );
 
   const selected = languageRows.find((row) => row.code === scope) ?? languageRows[0];
-
-  /** Query string shared by every format button. */
-  const baseParams = useMemo(() => {
-    const params = new URLSearchParams();
-    if (scope === 'source') {
-      params.set('scope', 'source');
-    } else {
-      params.set('scope', scope);
-      params.set('language', scope);
-    }
-    if (owner) params.set('owner', owner);
-    if (group !== 'all') params.set('group', group);
-    if (from) params.set('from', from);
-    if (to) params.set('to', to);
-    return params;
-  }, [scope, owner, group, from, to]);
-
   const groupHint = GROUPINGS.find((item) => item.value === group)?.hint ?? '';
   const willZip = group !== 'all';
   const selectedOwner = members.find((member) => member.id === owner);
+
+  async function download(format: (typeof FORMATS)[number]['value']) {
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const outcome = await runExport({
+        profile: viewer,
+        format,
+        scope,
+        owner: canPickMember ? owner || undefined : undefined,
+        group,
+        from: from || undefined,
+        to: to || undefined,
+        languageName: (code: string) => {
+          const language = languages.find((item) => item.code === code);
+          return language ? language.name_ar || language.name_en || code : code.toUpperCase();
+        }
+      });
+      setNotice(`تم توليد ${outcome.filename} (${outcome.count} منشورًا) وتنزيله.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'تعذر إنشاء ملف التصدير.');
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <section className="card panel export-panel" style={{ marginBottom: 16 }}>
@@ -143,13 +160,16 @@ export default function LanguageExportPanel({
           <h2 style={{ marginBottom: 2 }}>📤 التصدير</h2>
           <p className="muted" style={{ margin: 0 }}>
             اختر <strong>لمن</strong> و<strong>لأي فترة</strong> و<strong>أي لغة</strong>، ثم قسّم الملفات
-            حسب السنة أو الشهر أو الحساب.
+            حسب السنة أو الشهر أو الحساب — الملف يُبنى في متصفحك ثم يُنزَّل مباشرة.
           </p>
         </div>
         <button className="btn secondary small" onClick={() => setOpen((value) => !value)}>
           {open ? 'إخفاء الخيارات' : 'إظهار الخيارات'}
         </button>
       </div>
+
+      {error && <div className="notice error" style={{ marginTop: 10 }}>{error}</div>}
+      {notice && <div className="notice" style={{ marginTop: 10 }}>{notice}</div>}
 
       {open && (
         <>
@@ -284,24 +304,24 @@ export default function LanguageExportPanel({
             ) : (
               <>
                 <div className="row" style={{ marginTop: 12 }}>
-                  {FORMATS.map((format) => {
-                    const params = new URLSearchParams(baseParams);
-                    params.set('format', format.value);
-                    return (
-                      <a
-                        key={format.value}
-                        className="btn secondary small export-btn"
-                        href={`/api/export?${params.toString()}`}
-                      >
-                        <span>{format.label}</span>
-                        <em>.{willZip ? 'zip' : format.ext}</em>
-                      </a>
-                    );
-                  })}
+                  {FORMATS.map((format) => (
+                    <button
+                      key={format.value}
+                      type="button"
+                      className="btn secondary small export-btn"
+                      disabled={busy}
+                      onClick={() => void download(format.value)}
+                    >
+                      <span>{format.label}</span>
+                      <em>.{willZip ? 'zip' : format.ext}</em>
+                    </button>
+                  ))}
                 </div>
 
                 <p className="muted" style={{ marginBottom: 0, marginTop: 8 }}>
-                  {willZip ? (
+                  {busy ? (
+                    <>جارٍ توليد الملف في المتصفح… قد يستغرق لحظات مع الأرشيف الكبير.</>
+                  ) : willZip ? (
                     <>
                       سيتم تنزيل <strong>ملف ZIP</strong> يحتوي {groupHint}، وكل ملف بداخله بصيغة{' '}
                       {FORMATS.map((f) => f.label).join(' / ')} حسب الزر الذي تضغطه.

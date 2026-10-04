@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
 
 /**
@@ -137,13 +138,13 @@ export default function ConnectClient() {
           <button className="btn" onClick={() => setAttempt((n) => n + 1)} disabled={phase === 'sending'}>
             {phase === 'sending' ? 'جارٍ المحاولة…' : 'إعادة محاولة الربط'}
           </button>
-          <a className="btn secondary" href="/">الذهاب إلى لوحة مناقيش</a>
+          <Link className="btn secondary" href="/dashboard">الذهاب إلى لوحة مناقيش</Link>
         </div>
       )}
 
       {phase === 'sent' && (
         <div className="row" style={{ marginTop: 16 }}>
-          <a className="btn" href="/">الذهاب إلى لوحة مناقيش</a>
+          <Link className="btn" href="/dashboard">الذهاب إلى لوحة مناقيش</Link>
           <a className="btn secondary" href="https://www.facebook.com" target="_blank" rel="noreferrer noopener">
             فتح فيسبوك
           </a>

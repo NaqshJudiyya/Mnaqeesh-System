@@ -1,21 +1,55 @@
-import { redirect } from 'next/navigation';
-import { describeAccess } from '@/lib/session';
+'use client';
 
-export const dynamic = 'force-dynamic';
+import { useEffect, useState } from 'react';
+import { appPath } from '@/lib/client/paths';
+import { describeAccess } from '@/lib/client/session';
 
 /**
- * Entry point.
- *
- * Sends each state to the right place instead of failing silently:
- * signed out -> login, unactivated account -> explanation page.
+ * Entry point — static-hosting version of the old server redirector.
+ * Sends each state to the right place: signed out -> login, unactivated
+ * account -> explanation page, active -> dashboard.
  */
-export default async function RootPage() {
-  const access = await describeAccess();
+export default function RootPage() {
+  const [message, setMessage] = useState('جارٍ التحقق من الجلسة…');
 
-  if (access.state === 'anonymous') redirect('/login');
-  if (access.state === 'no_profile') redirect('/not-authorized?reason=no_profile');
-  if (access.state === 'pending') redirect('/not-authorized?reason=pending');
-  if (access.state === 'disabled') redirect('/not-authorized?reason=disabled');
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const access = await describeAccess();
+        if (cancelled) return;
+        switch (access.state) {
+          case 'active':
+            window.location.replace(appPath('/dashboard'));
+            return;
+          case 'anonymous':
+            window.location.replace(appPath('/login'));
+            return;
+          case 'no_profile':
+            window.location.replace(appPath('/not-authorized?reason=no_profile'));
+            return;
+          case 'pending':
+            window.location.replace(appPath('/not-authorized?reason=pending'));
+            return;
+          case 'disabled':
+            window.location.replace(appPath('/not-authorized?reason=disabled'));
+            return;
+        }
+      } catch {
+        if (!cancelled) setMessage('تعذر التحقق من الجلسة. أعد تحميل الصفحة.');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
-  redirect('/dashboard');
+  return (
+    <main className="login-shell">
+      <section className="card login-card">
+        <div className="logo">م</div>
+        <p>{message}</p>
+      </section>
+    </main>
+  );
 }

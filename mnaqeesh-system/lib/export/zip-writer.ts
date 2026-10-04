@@ -1,12 +1,14 @@
 /**
- * Minimal ZIP writer (DEFLATE via Node's zlib).
+ * Minimal ZIP writer — browser AND server compatible.
  *
- * Kept dependency-free on purpose: this project has to install and build
- * on Vercel's free tier without pulling in a spreadsheet or archive
- * library. The XLSX writer below feeds this.
+ * Kept dependency-free on purpose: this project has to build on a static
+ * host without pulling in an archive library. The XLSX writer feeds this.
+ *
+ * Originally this used Node's zlib; the static (GitHub Pages / Firebase
+ * Hosting) build runs in the BROWSER, so compression now uses the
+ * standard CompressionStream API with a store-only fallback, and all
+ * byte handling is plain Uint8Array + DataView instead of Buffer.
  */
-
-import { deflateRawSync } from 'node:zlib';
 
 const CRC_TABLE: number[] = (() => {
   const table = new Array<number>(256);
@@ -20,12 +22,28 @@ const CRC_TABLE: number[] = (() => {
   return table;
 })();
 
-function crc32(buffer: Buffer): number {
+function crc32(bytes: Uint8Array): number {
   let crc = 0xffffffff;
-  for (let i = 0; i < buffer.length; i += 1) {
-    crc = CRC_TABLE[(crc ^ buffer[i]) & 0xff] ^ (crc >>> 8);
+  for (let i = 0; i < bytes.length; i += 1) {
+    crc = CRC_TABLE[(crc ^ bytes[i]) & 0xff] ^ (crc >>> 8);
   }
   return (crc ^ 0xffffffff) >>> 0;
+}
+
+const encoder = new TextEncoder();
+
+/** DEFLATE-raw via CompressionStream, or null when unsupported. */
+async function deflateRaw(bytes: Uint8Array): Promise<Uint8Array | null> {
+  if (typeof CompressionStream === 'undefined') return null;
+  try {
+    const stream = new Blob([bytes as BlobPart])
+      .stream()
+      .pipeThrough(new CompressionStream('deflate-raw'));
+    const buffer = await new Response(stream).arrayBuffer();
+    return new Uint8Array(buffer);
+  } catch {
+    return null;
+  }
 }
 
 /** MS-DOS packed date/time, as required by the ZIP central directory. */
@@ -37,73 +55,103 @@ function dosDateTime(date: Date): { time: number; date: number } {
   return { time: time & 0xffff, date: dosDate & 0xffff };
 }
 
-export type ZipEntry = { path: string; data: Buffer | string };
+/** Growable little-endian byte sink. */
+class ByteWriter {
+  private chunks: Uint8Array[] = [];
+  length = 0;
 
-export function buildZip(entries: ZipEntry[], modified: Date = new Date(0)): Buffer {
+  push(bytes: Uint8Array): void {
+    this.chunks.push(bytes);
+    this.length += bytes.length;
+  }
+
+  bytes(count: number): DataView {
+    const view = new DataView(new ArrayBuffer(count));
+    this.chunks.push(new Uint8Array(view.buffer));
+    this.length += count;
+    return view;
+  }
+
+  toUint8Array(): Uint8Array {
+    const out = new Uint8Array(this.length);
+    let offset = 0;
+    for (const chunk of this.chunks) {
+      out.set(chunk, offset);
+      offset += chunk.length;
+    }
+    return out;
+  }
+}
+
+export type ZipEntry = { path: string; data: Uint8Array | string };
+
+export async function buildZip(entries: ZipEntry[], modified: Date = new Date(0)): Promise<Uint8Array> {
   const { time, date } = dosDateTime(modified);
-  const chunks: Buffer[] = [];
-  const central: Buffer[] = [];
+  const out = new ByteWriter();
+  const central = new ByteWriter();
   let offset = 0;
 
   for (const entry of entries) {
-    const nameBuffer = Buffer.from(entry.path, 'utf8');
-    const raw = Buffer.isBuffer(entry.data) ? entry.data : Buffer.from(entry.data, 'utf8');
+    const nameBytes = encoder.encode(entry.path);
+    const raw = typeof entry.data === 'string' ? encoder.encode(entry.data) : entry.data;
 
     // Tiny files get bigger under DEFLATE, so store them instead.
-    const deflated = deflateRawSync(raw, { level: 9 });
-    const useDeflate = deflated.length < raw.length;
+    const deflated = await deflateRaw(raw);
+    const useDeflate = deflated !== null && deflated.length < raw.length;
     const payload = useDeflate ? deflated : raw;
     const method = useDeflate ? 8 : 0;
     const crc = crc32(raw);
 
-    const localHeader = Buffer.alloc(30);
-    localHeader.writeUInt32LE(0x04034b50, 0); // local file header signature
-    localHeader.writeUInt16LE(20, 4); // version needed
-    localHeader.writeUInt16LE(0x0800, 6); // UTF-8 filename flag
-    localHeader.writeUInt16LE(method, 8);
-    localHeader.writeUInt16LE(time, 10);
-    localHeader.writeUInt16LE(date, 12);
-    localHeader.writeUInt32LE(crc, 14);
-    localHeader.writeUInt32LE(payload.length, 18);
-    localHeader.writeUInt32LE(raw.length, 22);
-    localHeader.writeUInt16LE(nameBuffer.length, 26);
-    localHeader.writeUInt16LE(0, 28); // no extra field
+    const localHeader = out.bytes(30);
+    localHeader.setUint32(0, 0x04034b50, true); // local file header signature
+    localHeader.setUint16(4, 20, true); // version needed
+    localHeader.setUint16(6, 0x0800, true); // UTF-8 filename flag
+    localHeader.setUint16(8, method, true);
+    localHeader.setUint16(10, time, true);
+    localHeader.setUint16(12, date, true);
+    localHeader.setUint32(14, crc, true);
+    localHeader.setUint32(18, payload.length, true);
+    localHeader.setUint32(22, raw.length, true);
+    localHeader.setUint16(26, nameBytes.length, true);
+    localHeader.setUint16(28, 0, true); // no extra field
 
-    chunks.push(localHeader, nameBuffer, payload);
+    out.push(nameBytes);
+    out.push(payload);
 
-    const centralHeader = Buffer.alloc(46);
-    centralHeader.writeUInt32LE(0x02014b50, 0); // central directory signature
-    centralHeader.writeUInt16LE(20, 4); // version made by
-    centralHeader.writeUInt16LE(20, 6); // version needed
-    centralHeader.writeUInt16LE(0x0800, 8); // UTF-8 flag
-    centralHeader.writeUInt16LE(method, 10);
-    centralHeader.writeUInt16LE(time, 12);
-    centralHeader.writeUInt16LE(date, 14);
-    centralHeader.writeUInt32LE(crc, 16);
-    centralHeader.writeUInt32LE(payload.length, 20);
-    centralHeader.writeUInt32LE(raw.length, 24);
-    centralHeader.writeUInt16LE(nameBuffer.length, 28);
-    centralHeader.writeUInt16LE(0, 30); // extra length
-    centralHeader.writeUInt16LE(0, 32); // comment length
-    centralHeader.writeUInt16LE(0, 34); // disk number
-    centralHeader.writeUInt16LE(0, 36); // internal attributes
-    centralHeader.writeUInt32LE(0, 38); // external attributes
-    centralHeader.writeUInt32LE(offset, 42);
+    const centralHeader = central.bytes(46);
+    centralHeader.setUint32(0, 0x02014b50, true); // central directory signature
+    centralHeader.setUint16(4, 20, true); // version made by
+    centralHeader.setUint16(6, 20, true); // version needed
+    centralHeader.setUint16(8, 0x0800, true); // UTF-8 flag
+    centralHeader.setUint16(10, method, true);
+    centralHeader.setUint16(12, time, true);
+    centralHeader.setUint16(14, date, true);
+    centralHeader.setUint32(16, crc, true);
+    centralHeader.setUint32(20, payload.length, true);
+    centralHeader.setUint32(24, raw.length, true);
+    centralHeader.setUint16(28, nameBytes.length, true);
+    centralHeader.setUint16(30, 0, true); // extra length
+    centralHeader.setUint16(32, 0, true); // comment length
+    centralHeader.setUint16(34, 0, true); // disk number
+    centralHeader.setUint16(36, 0, true); // internal attributes
+    centralHeader.setUint32(38, 0, true); // external attributes
+    centralHeader.setUint32(42, offset, true);
 
-    central.push(centralHeader, nameBuffer);
-    offset += localHeader.length + nameBuffer.length + payload.length;
+    central.push(nameBytes);
+    offset += 30 + nameBytes.length + payload.length;
   }
 
-  const centralBuffer = Buffer.concat(central);
-  const end = Buffer.alloc(22);
-  end.writeUInt32LE(0x06054b50, 0); // end of central directory
-  end.writeUInt16LE(0, 4); // this disk
-  end.writeUInt16LE(0, 6); // disk with central directory
-  end.writeUInt16LE(entries.length, 8);
-  end.writeUInt16LE(entries.length, 10);
-  end.writeUInt32LE(centralBuffer.length, 12);
-  end.writeUInt32LE(offset, 16);
-  end.writeUInt16LE(0, 20); // no comment
+  const centralBytes = central.toUint8Array();
+  const end = out.bytes(22);
+  end.setUint32(0, 0x06054b50, true); // end of central directory
+  end.setUint16(4, 0, true); // this disk
+  end.setUint16(6, 0, true); // disk with central directory
+  end.setUint16(8, entries.length, true);
+  end.setUint16(10, entries.length, true);
+  end.setUint32(12, centralBytes.length, true);
+  end.setUint32(16, offset, true);
+  end.setUint16(20, 0, true); // no comment
 
-  return Buffer.concat([...chunks, centralBuffer, end]);
+  out.push(centralBytes);
+  return out.toUint8Array();
 }

@@ -1,8 +1,10 @@
 'use client';
 
-import { Suspense, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
+import { appPath } from '@/lib/client/paths';
+import { waitForSession } from '@/lib/client/session';
 
 /**
  * Members the manager created by hand sign in with a username, which the
@@ -17,9 +19,17 @@ function resolveLoginEmail(input: string): string {
   return value.includes('@') ? value : `${value.toLowerCase()}@${MEMBER_EMAIL_DOMAIN}`;
 }
 
+/**
+ * Only a real same-origin path — `//evil.com` is protocol-relative and
+ * `/\evil.com` normalises the same way in browsers, so both are refused.
+ */
+function safeNextPath(next: string): string {
+  return /^\/(?![/\\])/.test(next) ? next : '/dashboard';
+}
+
 function LoginForm() {
   const params = useSearchParams();
-  const next = params.get('next') ?? '/';
+  const next = params.get('next') ?? '/dashboard';
   const urlError = params.get('error');
 
   const [mode, setMode] = useState<'google' | 'password'>('google');
@@ -28,14 +38,29 @@ function LoginForm() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(urlError ?? '');
 
+  // The OAuth return lands HERE (no server callback on a static host):
+  // the browser client exchanges the PKCE code automatically, and this
+  // effect notices the session and forwards to the destination.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const session = await waitForSession();
+      if (cancelled || !session) return;
+      window.location.replace(appPath(safeNextPath(next)));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [next]);
+
   async function signInWithGoogle() {
     setLoading(true);
     setError('');
     try {
       const supabase = createClient();
-      const callback = new URL('/auth/callback', window.location.origin);
-      if (next.startsWith('/')) callback.searchParams.set('next', next);
-
+      // Static hosts serve the site from one origin; the PKCE code comes
+      // back to /login and is exchanged in the browser (effect above).
+      const callback = new URL(appPath('/login'), window.location.origin);
       const { error: authError } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
@@ -67,8 +92,7 @@ function LoginForm() {
         );
       }
 
-      const destination = next.startsWith('/') && !next.startsWith('//') ? next : '/dashboard';
-      window.location.href = destination;
+      window.location.href = appPath(safeNextPath(next));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'تعذر تسجيل الدخول.');
       setLoading(false);

@@ -13,14 +13,15 @@ type Tab = { href: string; label: string; exact?: boolean };
  * translators have no route into the member list or the audit log.
  */
 export default function DashboardNav({ isManager }: { isManager: boolean }) {
-  const pathname = usePathname();
+  const pathname = usePathname().replace(/\/+$/, '') || '/';
 
   const tabs: Tab[] = [
     { href: '/dashboard', label: 'المنشورات', exact: true },
     ...(isManager
       ? [
           { href: '/dashboard/members', label: 'الأعضاء والصلاحيات' },
-          { href: '/dashboard/activity', label: 'سجل النشاط' }
+          { href: '/dashboard/activity', label: 'سجل النشاط' },
+          { href: '/dashboard/settings', label: 'الإعدادات' }
         ]
       : [])
   ];

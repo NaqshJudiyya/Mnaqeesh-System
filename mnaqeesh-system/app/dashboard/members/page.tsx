@@ -1,47 +1,73 @@
-import { cookies } from 'next/headers';
-import { redirect } from 'next/navigation';
-import { describeAccess, listMembers, countPostsByUser } from '@/lib/session';
-import { canSeeMembers } from '@/lib/rbac';
+'use client';
+
+import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { useSession } from '@/components/auth-gate';
 import MembersClient from '@/components/members-client';
+import { countPostsByUser, listMembers, readStashedOrigin } from '@/lib/client/members';
+import { canSeeMembers } from '@/lib/rbac';
+import { appPath } from '@/lib/client/paths';
+import type { MemberRow } from '@/lib/client/members';
 
-export const dynamic = 'force-dynamic';
+/**
+ * الأعضاء والصلاحيات — manager only. The server page used to gate access
+ * and pre-load the list; both happen client-side now.
+ */
+export default function MembersPage() {
+  const session = useSession();
+  const router = useRouter();
 
-/** Reads the stashed original session to learn who we switched away from. */
-async function readOriginEmail(): Promise<string> {
-  try {
-    const store = await cookies();
-    const raw = store.get('mnq_origin')?.value;
-    if (!raw) return '';
-    const parsed = JSON.parse(raw) as { email?: string };
-    return parsed.email ?? '';
-  } catch {
-    return '';
-  }
-}
+  const [members, setMembers] = useState<MemberRow[] | null>(null);
+  const [refused, setRefused] = useState(false);
+  const [loadError, setLoadError] = useState('');
 
-export default async function MembersPage() {
-  const access = await describeAccess();
-  if (access.state !== 'active') redirect('/login');
+  useEffect(() => {
+    if (!session) return;
 
-  // Editors and translators are refused here, not just hidden in the UI.
-  if (!canSeeMembers(access.session.profile)) {
-    redirect('/not-authorized?reason=members');
-  }
+    // Editors and translators are refused here, not just hidden in the UI.
+    if (!canSeeMembers(session.profile)) {
+      router.replace(appPath('/not-authorized?reason=members'));
+      setRefused(true);
+      return;
+    }
 
-  const [members, counts, originEmail] = await Promise.all([
-    listMembers(),
-    countPostsByUser(),
-    readOriginEmail()
-  ]);
+    let cancelled = false;
+    (async () => {
+      try {
+        const [rows, counts] = await Promise.all([listMembers(), countPostsByUser()]);
+        if (cancelled) return;
+        setMembers(rows.map((member) => ({ ...member, post_count: counts[member.id] ?? 0 })));
+      } catch (error) {
+        if (!cancelled) {
+          setLoadError(error instanceof Error ? error.message : 'تعذر تحميل الأعضاء.');
+          setMembers([]);
+        }
+      }
+    })();
 
-  const rows = members.map((member) => ({ ...member, post_count: counts[member.id] ?? 0 }));
+    return () => {
+      cancelled = true;
+    };
+  }, [session, router]);
+
+  if (!session || refused) return null;
+
+  const originStash = readStashedOrigin();
 
   return (
-    <MembersClient
-      currentUserId={access.session.userId}
-      initialMembers={rows}
-      isImpersonating={originEmail.length > 0}
-      originEmail={originEmail}
-    />
+    <>
+      {loadError && <div className="notice error">{loadError}</div>}
+      {members === null ? (
+        <section className="card"><div className="empty">جارٍ تحميل الأعضاء…</div></section>
+      ) : (
+        <MembersClient
+          viewer={session.profile}
+          currentUserId={session.userId}
+          initialMembers={members}
+          isImpersonating={Boolean(originStash)}
+          originEmail={originStash?.email ?? ''}
+        />
+      )}
+    </>
   );
 }

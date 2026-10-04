@@ -17,6 +17,18 @@ import type { Profile } from '@/lib/rbac';
 import Modal from '@/components/modal';
 import MarkdownEditor from '@/components/markdown-editor';
 import ImportPanel from '@/components/import-panel';
+import {
+  getPost,
+  listPosts,
+  restorePosts,
+  runBulkAction,
+  softDeletePosts,
+  updatePost,
+  addLanguage,
+  deleteTranslation,
+  upsertTranslation
+} from '@/lib/client/posts';
+import { logActivity } from '@/lib/client/session';
 
 type Member = { id: string; full_name: string; email: string };
 
@@ -29,7 +41,8 @@ type Props = {
   translationCounts: Record<string, number>;
 };
 
-function formatDateTime(value: string): string {
+function formatDateTime(value: string | null | undefined): string {
+  if (!value) return '—';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '—';
   return new Intl.DateTimeFormat('ar-EG', { dateStyle: 'medium', timeStyle: 'short' }).format(date);
@@ -76,7 +89,8 @@ const VIEW_FILTERS: { value: 'all' | StatusVariant; label: string }[] = [
   { value: 'review', label: 'يحتاج مراجعة' }
 ];
 
-/** A compact dropdown for a table column header. */function HeaderSelect({
+/** A compact dropdown for a table column header. */
+function HeaderSelect({
   label,
   value,
   onChange,
@@ -180,7 +194,19 @@ export default function PostsClient({ viewer, members, languages, translationCou
   const [language, setLanguage] = useState('');
   const [viewStatus, setViewStatus] = useState<'all' | StatusVariant>('all');
 
-  const isManager = viewer.role === 'admin';
+  // Trash view (سلة المهملات): soft-deleted rows instead of live ones.
+  const [trashMode, setTrashMode] = useState(false);
+
+  // Multi-select for the bulk actions.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkStatus, setBulkStatus] = useState('');
+  const [bulkAuthor, setBulkAuthor] = useState('');
+
+  // Single-post author correction (manager only).
+  const [authorEdit, setAuthorEdit] = useState<PostRow | null>(null);
+  const [authorValue, setAuthorValue] = useState('');
+  const [authorBusy, setAuthorBusy] = useState(false);
 
   // Modals
   const [editPost, setEditPost] = useState<PostRow | null>(null);
@@ -188,6 +214,11 @@ export default function PostsClient({ viewer, members, languages, translationCou
   const [showImport, setShowImport] = useState(false);
   const [editorBusy, setEditorBusy] = useState(false);
   const mounted = useRef(true);
+
+  const isManager = viewer.role === 'admin';
+  // Translators hold no power over original posts, so they get no
+  // selection column and no bulk bar at all.
+  const canBulk = isManager || viewer.role === 'editor' || viewer.role === 'collector';
 
   useEffect(() => {
     mounted.current = true;
@@ -207,28 +238,36 @@ export default function PostsClient({ viewer, members, languages, translationCou
   const load = useCallback(async () => {
     setLoading(true);
     setError('');
-    const params = new URLSearchParams({ page: String(page), pageSize: '50' });
-    if (debouncedQuery) params.set('q', debouncedQuery);
-    if (owner) params.set('owner', owner);
-    if (privacy) params.set('privacy', privacy);
-    if (status) params.set('status', status);
-    if (language) params.set('language', language);
-
     try {
-      const response = await fetch(`/api/posts?${params.toString()}`, { cache: 'no-store' });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || 'تعذر تحميل المنشورات.');
-      if (mounted.current) setData(payload as PostsPage);
+      const postsPage = await listPosts(viewer, {
+        page,
+        pageSize: 50,
+        q: debouncedQuery || undefined,
+        owner: owner || undefined,
+        privacy: privacy || undefined,
+        status: status || undefined,
+        language: language || undefined,
+        trash: trashMode
+      });
+      if (mounted.current) setData(postsPage);
     } catch (err) {
       if (mounted.current) setError(err instanceof Error ? err.message : 'تعذر تحميل المنشورات.');
     } finally {
       if (mounted.current) setLoading(false);
     }
-  }, [page, debouncedQuery, owner, privacy, status, language]);
+  }, [viewer, page, debouncedQuery, owner, privacy, status, language, trashMode]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  // The selection is page-bound: any change of view or filters starts a
+  // fresh selection so a bulk action can never hit an invisible row.
+  useEffect(() => {
+    setSelected(new Set());
+    setBulkStatus('');
+    setBulkAuthor('');
+  }, [page, debouncedQuery, owner, privacy, status, language, trashMode]);
 
   /** Replaces one row in place so the table updates without a full reload. */
   function patchRow(postId: string, patch: Partial<PostRow>) {
@@ -242,10 +281,9 @@ export default function PostsClient({ viewer, members, languages, translationCou
     setNotice(message);
     // Pull the authoritative row (with translations) so counts stay right.
     try {
-      const response = await fetch(`/api/posts/${postId}`, { cache: 'no-store' });
-      if (response.ok) {
-        const payload = await response.json();
-        if (payload.post) patchRow(postId, payload.post as PostRow);
+      const post = await getPost(viewer, postId);
+      if (post) {
+        patchRow(postId, post);
         return;
       }
     } catch {
@@ -255,20 +293,111 @@ export default function PostsClient({ viewer, members, languages, translationCou
   }
 
   async function deletePost(post: PostRow) {
-    if (!window.confirm('سيتم نقل المنشور إلى المحذوفات. هل تريد المتابعة؟')) return;
+    if (!window.confirm('سيتم نقل المنشور إلى سلة المهملات. هل تريد المتابعة؟')) return;
     try {
-      const response = await fetch(`/api/posts/${post.id}`, { method: 'DELETE' });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error((payload as { error?: string }).error || 'تعذر الحذف.');
+      const changed = await softDeletePosts([post.id]);
+      if (changed === 0) throw new Error('لا تملك صلاحية حذف هذا المنشور.');
       setData((current) => ({
         ...current,
         rows: current.rows.filter((row) => row.id !== post.id),
         total: Math.max(0, current.total - 1)
       }));
-      setNotice('تم نقل المنشور إلى المحذوفات.');
+      setNotice('تم نقل المنشور إلى سلة المهملات. يمكنك استعادته من زر «سلة المهملات».');
+      void logActivity({
+        action: 'post.delete',
+        entity: 'posts',
+        entityId: post.id,
+        details: { author: (post.author || '').slice(0, 200) }
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'تعذر حذف المنشور.');
     }
+  }
+
+  async function restorePost(post: PostRow) {
+    try {
+      const changed = await restorePosts([post.id]);
+      if (changed === 0) throw new Error('لا تملك صلاحية استعادة هذا المنشور.');
+      setData((current) => ({
+        ...current,
+        rows: current.rows.filter((row) => row.id !== post.id),
+        total: Math.max(0, current.total - 1)
+      }));
+      setNotice('تمت استعادة المنشور وعاد إلى قائمة المنشورات.');
+      void logActivity({ action: 'post.restore', entity: 'posts', entityId: post.id, details: {} });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'تعذر استعادة المنشور.');
+    }
+  }
+
+  async function saveAuthor() {
+    if (!authorEdit) return;
+    setAuthorBusy(true);
+    setError('');
+    try {
+      const changed = await updatePost(authorEdit.id, { author: authorValue });
+      if (changed === 0) throw new Error('تعذر تغيير صاحب البوست — تحقق من صلاحياتك.');
+      patchRow(authorEdit.id, { author: authorValue });
+      setAuthorEdit(null);
+      setNotice('تم تغيير صاحب البوست (حساب فيسبوك).');
+      void logActivity({
+        action: 'post.author_change',
+        entity: 'posts',
+        entityId: authorEdit.id,
+        details: { previousAuthor: authorEdit.author, author: authorValue }
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'تعذر تغيير صاحب البوست.');
+    } finally {
+      setAuthorBusy(false);
+    }
+  }
+
+  async function runBulk(action: 'status' | 'delete' | 'restore' | 'author') {
+    const ids = [...selected];
+    if (ids.length === 0) return;
+
+    if (action === 'delete') {
+      const ok = window.confirm(`سيتم نقل ${ids.length} منشورًا إلى سلة المهملات. هل تريد المتابعة؟`);
+      if (!ok) return;
+    }
+
+    setBulkBusy(true);
+    setError('');
+    try {
+      const result = await runBulkAction(viewer, {
+        action,
+        ids,
+        ...(action === 'status' ? { status: bulkStatus } : {}),
+        ...(action === 'author' ? { author: bulkAuthor } : {}),
+        canEditRow: (row) => isManager || viewer.role === 'editor' || row.user_id === viewer.id,
+        canDeleteRow: (row) => isManager || viewer.role === 'editor' || row.user_id === viewer.id
+      });
+
+      setSelected(new Set());
+      const skippedNote = result.skipped > 0 ? ` · تُوفي ${result.skipped} منشورًا لا تملك صلاحية عليه` : '';
+      const messages: Record<typeof action, string> = {
+        status: `تم تغيير حالة ${result.updated} منشورًا${skippedNote}.`,
+        delete: `تم نقل ${result.updated} منشورًا إلى سلة المهملات${skippedNote}.`,
+        restore: `تمت استعادة ${result.updated} منشورًا${skippedNote}.`,
+        author: `تم تغيير صاحب البوست في ${result.updated} منشورًا${skippedNote}.`
+      };
+      setNotice(messages[action]);
+      void load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'تعذر تنفيذ الإجراء الجماعي.');
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  function toggleSelected(postId: string) {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(postId)) next.delete(postId);
+      else next.add(postId);
+      return next;
+    });
   }
 
   const totalPages = Math.max(1, Math.ceil(data.total / data.pageSize));
@@ -276,9 +405,20 @@ export default function PostsClient({ viewer, members, languages, translationCou
 
   /** Rows after the derived-status view filter. */
   const visibleRows = useMemo(
-    () => (viewStatus === 'all' ? data.rows : data.rows.filter((post) => statusOf(post).variant === viewStatus)),
-    [data.rows, viewStatus]
+    () => (viewStatus === 'all' || trashMode ? data.rows : data.rows.filter((post) => statusOf(post).variant === viewStatus)),
+    [data.rows, viewStatus, trashMode]
   );
+
+  const allVisibleSelected = visibleRows.length > 0 && visibleRows.every((row) => selected.has(row.id));
+
+  function toggleSelectAll() {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (allVisibleSelected) visibleRows.forEach((row) => next.delete(row.id));
+      else visibleRows.forEach((row) => next.add(row.id));
+      return next;
+    });
+  }
 
   const activeFilterChips = useMemo(() => {
     const chips: { label: string; clear: () => void }[] = [];
@@ -290,12 +430,12 @@ export default function PostsClient({ viewer, members, languages, translationCou
     if (privacy) chips.push({ label: `الجمهور: ${PRIVACY_LABELS[privacy] ?? privacy}`, clear: () => setPrivacy('') });
     if (status) chips.push({ label: `الحالة: ${POST_STATUS_LABELS[status] ?? status}`, clear: () => setStatus('') });
     if (language) chips.push({ label: `الترجمة: ${languageName(languages, language)}`, clear: () => setLanguage('') });
-    if (viewStatus !== 'all') {
+    if (viewStatus !== 'all' && !trashMode) {
       const label = VIEW_FILTERS.find((item) => item.value === viewStatus)?.label ?? viewStatus;
       chips.push({ label: `العرض: ${label}`, clear: () => setViewStatus('all') });
     }
     return chips;
-  }, [debouncedQuery, owner, privacy, status, language, viewStatus, members, languages]);
+  }, [debouncedQuery, owner, privacy, status, language, viewStatus, trashMode, members, languages]);
 
   const translatedLanguages = languages.filter((lang) => (translationCounts[lang.code] ?? 0) > 0);
 
@@ -331,52 +471,154 @@ export default function PostsClient({ viewer, members, languages, translationCou
       )}
 
       <div className="row filter-bar" style={{ justifyContent: 'space-between' }}>
-        <span className="row" style={{ gap: 6 }}>
-          <span className="muted">الحالة:</span>
-          {VIEW_FILTERS.map((item) => (
+        {trashMode ? (
+          <span className="row" style={{ gap: 6 }}>
+            <strong>🗑 سلة المهملات</strong>
+            <span className="muted">المنشورات المحذوفة فقط — استعادتها تُعيدها إلى القائمة.</span>
+          </span>
+        ) : (
+          <span className="row" style={{ gap: 6 }}>
+            <span className="muted">الحالة:</span>
+            {VIEW_FILTERS.map((item) => (
+              <button
+                key={item.value}
+                type="button"
+                className={`chip ${viewStatus === item.value ? 'active' : ''}`}
+                onClick={() => setViewStatus(item.value)}
+                title={
+                  item.value === 'formatted'
+                    ? 'منشورات عُدّل نصها أو لها نسخة Markdown'
+                    : item.value === 'translated'
+                      ? 'منشورات لها ترجمة'
+                      : item.value === 'final'
+                        ? 'حدّدها المدير أو صاحب المنشور كنهائية'
+                        : item.value === 'review'
+                          ? 'حدّدها المدير أو صاحب المنشور كتحتاج مراجعة'
+                          : 'بدون فلتر حالة'
+                }
+              >
+                {item.label}
+              </button>
+            ))}
+            {viewStatus !== 'all' && (
+              <span className="muted" style={{ fontSize: 11.5 }}>
+                (داخل الصفحة الحالية)
+              </span>
+            )}
+          </span>
+        )}
+
+        <span className="row" style={{ gap: 8 }}>
+          {!trashMode && (
             <button
-              key={item.value}
               type="button"
-              className={`chip ${viewStatus === item.value ? 'active' : ''}`}
-              onClick={() => setViewStatus(item.value)}
-              title={
-                item.value === 'formatted'
-                  ? 'منشورات عُدّل نصها أو لها نسخة Markdown'
-                  : item.value === 'translated'
-                    ? 'منشورات لها ترجمة'
-                    : item.value === 'final'
-                      ? 'حدّدها المدير أو صاحب المنشور كنهائية'
-                      : item.value === 'review'
-                        ? 'حدّدها المدير أو صاحب المنشور كتحتاج مراجعة'
-                        : 'بدون فلتر حالة'
-              }
+              className="btn secondary small"
+              onClick={() => { setShowImport(true); setNotice(''); setError(''); }}
+              title="استيراد ملف JSON صدّرته الإضافة"
             >
-              {item.label}
+              ⬆ استيراد JSON
             </button>
-          ))}
-          {viewStatus !== 'all' && (
-            <span className="muted" style={{ fontSize: 11.5 }}>
-              (داخل الصفحة الحالية)
-            </span>
+          )}
+          {canBulk && (
+            <button
+              type="button"
+              className={`btn small ${trashMode ? '' : 'secondary'}`}
+              onClick={() => {
+                // The manual-status dropdown is hidden inside the trash,
+                // so a stale filter must not keep filtering silently.
+                setTrashMode((value) => !value);
+                setStatus('');
+                setViewStatus('all');
+                setPage(1);
+              }}
+              title={trashMode ? 'العودة إلى قائمة المنشورات' : 'عرض المنشورات المحذوفة لاستعادتها'}
+            >
+              {trashMode ? '↩ العودة إلى المنشورات' : '🗑 سلة المهملات'}
+            </button>
           )}
         </span>
-        <button
-          type="button"
-          className="btn secondary small"
-          onClick={() => { setShowImport(true); setNotice(''); setError(''); }}
-          title="استيراد ملف JSON صدّرته الإضافة"
-        >
-          ⬆ استيراد JSON
-        </button>
       </div>
+
+      {/* ---------------- bulk selection bar ---------------- */}
+      {canBulk && selected.size > 0 && (
+        <div className="row filter-bar bulk-bar" style={{ justifyContent: 'space-between' }}>
+          <span className="row" style={{ gap: 8 }}>
+            <strong>تم تحديد {selected.size} منشورًا</strong>
+
+            {trashMode ? (
+              <button type="button" className="btn small" disabled={bulkBusy} onClick={() => void runBulk('restore')}>
+                ♻ استعادة المحدد
+              </button>
+            ) : (
+              <>
+                <span className="row" style={{ gap: 4 }}>
+                  <select
+                    className="select"
+                    style={{ padding: '4px 8px', fontSize: 13 }}
+                    value={bulkStatus}
+                    onChange={(event) => setBulkStatus(event.target.value)}
+                    aria-label="تغيير حالة المحدد"
+                  >
+                    <option value="">غيّر الحالة إلى…</option>
+                    {POST_STATUSES.map((value) => (
+                      <option key={value} value={value}>{POST_STATUS_LABELS[value]}</option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="btn small"
+                    disabled={bulkBusy || !bulkStatus}
+                    onClick={() => void runBulk('status')}
+                  >
+                    تطبيق
+                  </button>
+                </span>
+
+                {isManager && (
+                  <span className="row" style={{ gap: 4 }}>
+                    <input
+                      className="input"
+                      style={{ padding: '4px 8px', fontSize: 13, width: 200 }}
+                      placeholder="صاحب البوست (حساب فيسبوك)…"
+                      value={bulkAuthor}
+                      onChange={(event) => setBulkAuthor(event.target.value)}
+                      aria-label="تعيين صاحب البوست للمحدد"
+                    />
+                    <button
+                      type="button"
+                      className="btn small"
+                      disabled={bulkBusy}
+                      onClick={() => void runBulk('author')}
+                      title="تغيير صاحب البوست (حساب فيسبوك) لكل المنشورات المحددة"
+                    >
+                      تعيين
+                    </button>
+                  </span>
+                )}
+
+                <button type="button" className="btn danger small" disabled={bulkBusy} onClick={() => void runBulk('delete')}>
+                  🗑 حذف المحدد
+                </button>
+              </>
+            )}
+          </span>
+          <button type="button" className="btn secondary small" disabled={bulkBusy} onClick={() => setSelected(new Set())}>
+            ✕ إلغاء التحديد
+          </button>
+        </div>
+      )}
 
       <section className="card table-wrap">
         {loading ? (
           <div className="empty">جارٍ تحميل المنشورات…</div>
         ) : data.rows.length === 0 ? (
           <div className="empty">
-            {hasFilters ? 'لا توجد منشورات مطابقة للفلاتر.' : 'لا توجد منشورات محفوظة بعد.'}
-            {viewer.role === 'collector' && !hasFilters && (
+            {trashMode
+              ? 'سلة المهملات فارغة.'
+              : hasFilters
+                ? 'لا توجد منشورات مطابقة للفلاتر.'
+                : 'لا توجد منشورات محفوظة بعد.'}
+            {!trashMode && viewer.role === 'collector' && !hasFilters && (
               <>
                 <br />
                 <span className="muted">احفظ منشورات من فيسبوك عبر الإضافة وستظهر هنا.</span>
@@ -389,6 +631,17 @@ export default function PostsClient({ viewer, members, languages, translationCou
           <table className="posts-table">
             <thead>
               <tr>
+                {canBulk && (
+                  <th className="th-check">
+                    <input
+                      type="checkbox"
+                      checked={allVisibleSelected}
+                      onChange={toggleSelectAll}
+                      aria-label="تحديد كل صفوف الصفحة"
+                      title="تحديد كل صفوف الصفحة"
+                    />
+                  </th>
+                )}
                 <th className="th-num">#</th>
                 {isManager && (
                   <th className="th-owner">
@@ -444,28 +697,41 @@ export default function PostsClient({ viewer, members, languages, translationCou
                   />
                 </th>
                 <th className="th-status">
-                  الحالة
-                  <HeaderSelect
-                    label="الكل"
-                    value={status}
-                    onChange={(next) => { setStatus(next); setPage(1); }}
-                    options={POST_STATUSES.map((value) => ({
-                      value,
-                      label: POST_STATUS_LABELS[value]
-                    }))}
-                  />
+                  {trashMode ? 'وقت الحذف' : 'الحالة'}
+                  {!trashMode && (
+                    <HeaderSelect
+                      label="الكل"
+                      value={status}
+                      onChange={(next) => { setStatus(next); setPage(1); }}
+                      options={POST_STATUSES.map((value) => ({
+                        value,
+                        label: POST_STATUS_LABELS[value]
+                      }))}
+                    />
+                  )}
                 </th>
                 <th className="th-actions">إجراء</th>
               </tr>
             </thead>
             <tbody>
-              {visibleRows.map((post, index) => {                const content = resolvePostContent(post);
+              {visibleRows.map((post, index) => {
+                const content = resolvePostContent(post);
                 const translations = post.translations ?? [];
                 const canEdit = isManager || viewer.role === 'editor' || post.user_id === viewer.id;
                 const canDelete = isManager || viewer.role === 'editor' || post.user_id === viewer.id;
 
                 return (
                   <tr key={post.id}>
+                    {canBulk && (
+                      <td className="td-check">
+                        <input
+                          type="checkbox"
+                          checked={selected.has(post.id)}
+                          onChange={() => toggleSelected(post.id)}
+                          aria-label={`تحديد منشور ${post.author || post.post_key}`}
+                        />
+                      </td>
+                    )}
                     <td className="cell-muted">{(data.page - 1) * data.pageSize + index + 1}</td>
                     {isManager && (
                       <td>
@@ -474,7 +740,22 @@ export default function PostsClient({ viewer, members, languages, translationCou
                       </td>
                     )}
                     <td>
-                      <div className="cell-title">{post.author || 'غير معروف'}</div>
+                      <div className="cell-title">
+                        {post.author || 'غير معروف'}
+                        {/* صاحب البوست (حساب فيسبوك) — تصحيح من المدير فقط.
+                            مستخدم حفظ المنشور نفسه لا يمكن تغييره لأحد. */}
+                        {isManager && !trashMode && (
+                          <button
+                            type="button"
+                            className="icon-action inline-edit"
+                            title="تغيير صاحب البوست (حساب فيسبوك)"
+                            aria-label="تغيير صاحب البوست (حساب فيسبوك)"
+                            onClick={() => { setAuthorEdit(post); setAuthorValue(post.author ?? ''); setNotice(''); }}
+                          >
+                            ✏️
+                          </button>
+                        )}
+                      </div>
                       <div className="cell-muted">{formatDateTime(post.saved_at)}</div>
                     </td>
                     <td>
@@ -510,70 +791,90 @@ export default function PostsClient({ viewer, members, languages, translationCou
                       )}
                     </td>
                     <td>
-                      {(() => {
-                        const badge = statusOf(post);
-                        return (
-                          <span
-                            className={`badge status-${badge.variant}`}
-                            title={
-                              badge.manual
-                                ? 'حالة يدوية حدّدها المدير أو صاحب المنشور'
-                                : badge.variant === 'formatted'
-                                  ? 'عُدّل نصه أو له نسخة Markdown'
-                                  : badge.variant === 'translated'
-                                    ? 'له ترجمة'
-                                    : 'محفوظ فقط، بلا تعديل ولا ترجمة'
-                            }
-                          >
-                            {badge.label}
-                          </span>
-                        );
-                      })()}
+                      {trashMode ? (
+                        <span className="cell-muted">{formatDateTime(post.deleted_at)}</span>
+                      ) : (
+                        (() => {
+                          const badge = statusOf(post);
+                          return (
+                            <span
+                              className={`badge status-${badge.variant}`}
+                              title={
+                                badge.manual
+                                  ? 'حالة يدوية حدّدها المدير أو صاحب المنشور'
+                                  : badge.variant === 'formatted'
+                                    ? 'عُدّل نصه أو له نسخة Markdown'
+                                    : badge.variant === 'translated'
+                                      ? 'له ترجمة'
+                                      : 'محفوظ فقط، بلا تعديل ولا ترجمة'
+                              }
+                            >
+                              {badge.label}
+                            </span>
+                          );
+                        })()
+                      )}
                     </td>
                     <td>
                       <div className="row-actions">
-                        {canEdit && (
-                          <button
-                            type="button"
-                            className="icon-action"
-                            title="تحرير Markdown"
-                            aria-label="تحرير Markdown"
-                            onClick={() => { setEditPost(post); setNotice(''); }}
-                          >
-                            ✏️
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          className="icon-action"
-                          title="إضافة ترجمة"
-                          aria-label="إضافة ترجمة"
-                          onClick={() => { setTranslatePost(post); setNotice(''); }}
-                        >
-                          🌐
-                        </button>
-                        {post.post_url && (
-                          <a
-                            className="icon-action"
-                            href={post.post_url}
-                            target="_blank"
-                            rel="noreferrer noopener"
-                            title="فتح المنشور على فيسبوك"
-                            aria-label="فتح المنشور على فيسبوك"
-                          >
-                            ↗
-                          </a>
-                        )}
-                        {canDelete && (
-                          <button
-                            type="button"
-                            className="icon-action danger"
-                            title="حذف المنشور"
-                            aria-label="حذف المنشور"
-                            onClick={() => void deletePost(post)}
-                          >
-                            🗑
-                          </button>
+                        {trashMode ? (
+                          canDelete && (
+                            <button
+                              type="button"
+                              className="icon-action"
+                              title="استعادة المنشور من سلة المهملات"
+                              aria-label="استعادة المنشور من سلة المهملات"
+                              onClick={() => void restorePost(post)}
+                            >
+                              ♻
+                            </button>
+                          )
+                        ) : (
+                          <>
+                            {canEdit && (
+                              <button
+                                type="button"
+                                className="icon-action"
+                                title="تحرير Markdown"
+                                aria-label="تحرير Markdown"
+                                onClick={() => { setEditPost(post); setNotice(''); }}
+                              >
+                                ✏️
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              className="icon-action"
+                              title="إضافة ترجمة"
+                              aria-label="إضافة ترجمة"
+                              onClick={() => { setTranslatePost(post); setNotice(''); }}
+                            >
+                              🌐
+                            </button>
+                            {post.post_url && (
+                              <a
+                                className="icon-action"
+                                href={post.post_url}
+                                target="_blank"
+                                rel="noreferrer noopener"
+                                title="فتح المنشور على فيسبوك"
+                                aria-label="فتح المنشور على فيسبوك"
+                              >
+                                ↗
+                              </a>
+                            )}
+                            {canDelete && (
+                              <button
+                                type="button"
+                                className="icon-action danger"
+                                title="حذف المنشور"
+                                aria-label="حذف المنشور"
+                                onClick={() => void deletePost(post)}
+                              >
+                                🗑
+                              </button>
+                            )}
+                          </>
                         )}
                       </div>
                     </td>
@@ -590,7 +891,7 @@ export default function PostsClient({ viewer, members, languages, translationCou
               السابق
             </button>
             <span className="muted">
-              الصفحة {data.page} من {totalPages} · {data.total} منشور
+              الصفحة {data.page} من {totalPages} · {data.total} {trashMode ? 'منشور محذوف' : 'منشور'}
             </span>
             <button className="btn secondary small" disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>
               التالي
@@ -637,6 +938,43 @@ export default function PostsClient({ viewer, members, languages, translationCou
         )}
       </Modal>
 
+      {/* ---------------- change author (manager only) ---------------- */}
+      <Modal
+        open={authorEdit !== null}
+        title="تغيير صاحب البوست"
+        subtitle="حساب فيسبوك المنسوب إليه المنشور — متاح لمدير النظام فقط."
+        onClose={() => { if (!authorBusy) setAuthorEdit(null); }}
+      >
+        {authorEdit && (
+          <>
+            <div className="notice">
+              هذه هي «الحساب» الظاهرة في الجدول. لا يمكن تغيير <strong>العضو الذي حفظ المنشور</strong> —
+              ذلك ثابت لكل منشور بعد الحفظ.
+            </div>
+            <div className="field">
+              <label htmlFor="author-input">صاحب البوست (حساب فيسبوك)</label>
+              <input
+                id="author-input"
+                className="input"
+                style={{ width: '100%' }}
+                value={authorValue}
+                onChange={(event) => setAuthorValue(event.target.value)}
+                maxLength={500}
+                placeholder="اسم الحساب كما يظهر على فيسبوك"
+              />
+            </div>
+            <div className="modal-foot" style={{ margin: '16px -18px -16px', borderRadius: '0 0 14px 14px' }}>
+              <button className="btn secondary" onClick={() => setAuthorEdit(null)} disabled={authorBusy}>
+                إلغاء
+              </button>
+              <button className="btn" onClick={() => void saveAuthor()} disabled={authorBusy}>
+                {authorBusy ? 'جارٍ الحفظ…' : 'حفظ'}
+              </button>
+            </div>
+          </>
+        )}
+      </Modal>
+
       {/* ---------------- Translation modal ---------------- */}
       <Modal
         open={translatePost !== null}
@@ -652,6 +990,8 @@ export default function PostsClient({ viewer, members, languages, translationCou
         {translatePost && (
           <TranslationPanel
             post={translatePost}
+            viewerId={viewer.id}
+            canOverride={isManager || viewer.role === 'editor'}
             languages={languages}
             onChanged={async (message) => {
               const postId = translatePost.id;
@@ -697,10 +1037,15 @@ function draftFor(translations: TranslationRow[], code: string): Draft {
 
 function TranslationPanel({
   post,
+  viewerId,
+  canOverride,
   languages,
   onChanged
 }: {
   post: PostRow;
+  viewerId: string;
+  /** True for the editor/manager, who may remove any translation. */
+  canOverride: boolean;
   languages: LanguageRow[];
   onChanged: (message: string) => Promise<void> | void;
 }) {
@@ -735,17 +1080,6 @@ function TranslationPanel({
     setShowAddLanguage(false);
   }
 
-  async function send(url: string, body: unknown, method = 'POST') {
-    const response = await fetch(url, {
-      method,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error((payload as { error?: string }).error || 'فشل الطلب.');
-    return payload;
-  }
-
   async function saveTranslation() {
     if (!activeLanguage) {
       setError('اختر لغة أولًا.');
@@ -754,13 +1088,20 @@ function TranslationPanel({
     setBusy(true);
     setError('');
     try {
-      await send('/api/translations', {
+      await upsertTranslation({
         postId: post.id,
         languageCode: activeLanguage,
         title: draftTitle,
         translatedText: draftText,
         bodyMarkdown: draftMarkdown || draftText,
+        translatorId: viewerId,
         isComplete: draftComplete
+      });
+      await logActivity({
+        action: 'translation.save',
+        entity: 'translations',
+        entityId: post.id,
+        details: { postId: post.id, language: activeLanguage }
       });
       setNotice(`تم حفظ ترجمة ${languageName(languages, activeLanguage)}.`);
       await onChanged(`تم حفظ ترجمة ${languageName(languages, activeLanguage)}.`);
@@ -771,12 +1112,22 @@ function TranslationPanel({
     }
   }
 
-  async function addLanguage() {
+  async function addLanguageAction() {
     setBusy(true);
     setError('');
     try {
-      const payload = await send('/api/languages', { code: newCode, nameAr: newName, nameEn: newName });
-      const language = payload.language as LanguageRow;
+      const language = await addLanguage({
+        code: newCode,
+        nameAr: newName,
+        nameEn: newName,
+        createdBy: viewerId
+      });
+      await logActivity({
+        action: 'language.add',
+        entity: 'languages',
+        entityId: language.code,
+        details: { nameAr: language.name_ar }
+      });
       setNewCode('');
       setNewName('');
       setShowAddLanguage(false);
@@ -797,7 +1148,25 @@ function TranslationPanel({
     setBusy(true);
     setError('');
     try {
-      await send(`/api/translations/${translationId}`, {}, 'DELETE');
+      const target = translations.find((t) => t.id === translationId);
+      // A translator may only remove their own unfinished draft; the
+      // database trigger (0007) enforces the same rule for any client.
+      if (target && !canOverride) {
+        if (target.translator_id !== viewerId) {
+          throw new Error('لا يمكنك حذف ترجمة كتبها مترجم آخر.');
+        }
+        if (target.is_complete) {
+          throw new Error('هذه الترجمة مكتملة، ولا يمكن حذفها إلا من محرر أو مدير النظام.');
+        }
+      }
+
+      await deleteTranslation(translationId);
+      await logActivity({
+        action: 'translation.delete',
+        entity: 'translations',
+        entityId: translationId,
+        details: { language: target?.language_code ?? '', wasComplete: target?.is_complete ?? false }
+      });
       selectLanguage('', []);
       setNotice('تم حذف الترجمة.');
       await onChanged('تم حذف الترجمة.');
@@ -860,7 +1229,7 @@ function TranslationPanel({
               onChange={(event) => setNewName(event.target.value)}
               maxLength={60}
             />
-            <button className="btn small" onClick={addLanguage} disabled={busy || !newCode || !newName}>
+            <button className="btn small" onClick={addLanguageAction} disabled={busy || !newCode || !newName}>
               إضافة
             </button>
           </div>

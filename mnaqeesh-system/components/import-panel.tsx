@@ -1,6 +1,8 @@
 'use client';
 
 import { useRef, useState } from 'react';
+import { createClient } from '@/lib/supabase/client';
+import { importArchiveFile } from '@/lib/client/import';
 
 type Props = {
   /** Called after a successful import so the table can reload. */
@@ -19,7 +21,9 @@ type Result = {
  *
  * Accepts every archive shape the extension has produced and merges it
  * into the signed-in member's archive. Re-importing the same file updates
- * rows instead of duplicating them, so it is safe to retry.
+ * rows instead of duplicating them, so it is safe to retry. The file is
+ * parsed in the browser and upserted straight to Supabase under the
+ * importer's own account (RLS pins user_id).
  */
 export default function ImportPanel({ onImported }: Props) {
   const [file, setFile] = useState<File | null>(null);
@@ -35,16 +39,12 @@ export default function ImportPanel({ onImported }: Props) {
     setResult(null);
 
     try {
-      const body = new FormData();
-      body.append('file', file);
+      const { data } = await createClient().auth.getSession();
+      const userId = data.session?.user.id;
+      if (!userId) throw new Error('انتهت صلاحية الجلسة. سجّل الدخول من جديد.');
 
-      const response = await fetch('/api/import', { method: 'POST', body });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error((payload as { error?: string }).error || 'تعذر الاستيراد.');
-      }
-
-      setResult(payload as Result);
+      const outcome = await importArchiveFile(file, userId);
+      setResult(outcome);
       setFile(null);
       if (inputRef.current) inputRef.current.value = '';
       onImported?.();

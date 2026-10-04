@@ -17,6 +17,12 @@ import { buildXlsx, type XlsxRow } from '@/lib/export/xlsx-writer';
 import { buildZip, type ZipEntry } from '@/lib/export/zip-writer';
 import { PRIVACY_LABELS, type ExportFormat, type PostRow } from '@/lib/types';
 
+const textEncoder = new TextEncoder();
+
+function utf8(value: string): Uint8Array {
+  return textEncoder.encode(value);
+}
+
 /** One post flattened into a single language version. */
 export type ExportItem = {
   postId: string;
@@ -48,7 +54,7 @@ export type ExportItem = {
 export type ExportResult = {
   filename: string;
   contentType: string;
-  body: Buffer;
+  body: Uint8Array;
 };
 
 // ---------------------------------------------------------------------
@@ -528,14 +534,14 @@ function sanitizeFilenamePart(value: string): string {
   return value.replace(/[\\/:*?"<>|\s]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 60) || 'export';
 }
 
-export function buildExport(input: {
+export async function buildExport(input: {
   items: ExportItem[];
   format: ExportFormat;
   languageCode: string;
   scopeLabel: string;
   /** Appended to the file name, e.g. `2026-03` or a member's name. */
   nameSuffix?: string;
-}): ExportResult {
+}): Promise<ExportResult> {
   const { items, format, languageCode, scopeLabel } = input;
   const stamp = new Date().toISOString().slice(0, 10);
   const langPart = languageCode ? sanitizeFilenamePart(languageCode) : 'source';
@@ -549,32 +555,32 @@ export function buildExport(input: {
       return {
         filename: `${base}.xlsx`,
         contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        body: buildXlsx(toXlsxRows(items), sheetName)
+        body: await buildXlsx(toXlsxRows(items), sheetName)
       };
     }
     case 'csv':
       return {
         filename: `${base}.csv`,
         contentType: 'text/csv; charset=utf-8',
-        body: Buffer.from(buildCsv(items), 'utf8')
+        body: utf8(buildCsv(items))
       };
     case 'json':
       return {
         filename: `${base}.json`,
         contentType: 'application/json; charset=utf-8',
-        body: Buffer.from(buildJson(items, scopeLabel, languageCode), 'utf8')
+        body: utf8(buildJson(items, scopeLabel, languageCode))
       };
     case 'markdown':
       return {
         filename: `${base}.md`,
         contentType: 'text/markdown; charset=utf-8',
-        body: Buffer.from(buildMarkdown(items, scopeLabel, languageCode), 'utf8')
+        body: utf8(buildMarkdown(items, scopeLabel, languageCode))
       };
     case 'wxr':
       return {
         filename: `${base}.xml`,
         contentType: 'application/xml; charset=utf-8',
-        body: Buffer.from('\ufeff' + buildWordPressWxr(items), 'utf8')
+        body: utf8('\ufeff' + buildWordPressWxr(items))
       };
     default:
       throw new Error('صيغة التصدير غير مدعومة.');
@@ -704,16 +710,16 @@ export function groupRows<T extends DatedRow>(
  * Used whenever a split produces more than one file, so the manager gets
  * one download instead of a burst of pop-ups.
  */
-export function buildGroupedZip(input: {
+export async function buildGroupedZip(input: {
   groups: ExportGroup<ExportItem>[];
   format: ExportFormat;
   languageCode: string;
   scopeLabel: string;
-}): ExportResult {
+}): Promise<ExportResult> {
   const entries: ZipEntry[] = [];
 
   for (const group of input.groups) {
-    const result = buildExport({
+    const result = await buildExport({
       items: group.rows,
       format: input.format,
       languageCode: input.languageCode,
@@ -729,7 +735,7 @@ export function buildGroupedZip(input: {
   return {
     filename: `mnaqeesh-${langPart}-${stamp}.zip`,
     contentType: 'application/zip',
-    body: buildZip(entries)
+    body: await buildZip(entries)
   };
 }
 

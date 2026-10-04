@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { renderMarkdownHtml, textStats } from '@/lib/markdown';
+import { updatePostContent } from '@/lib/client/posts';
+import { logActivity } from '@/lib/client/session';
 
 type Props = {
   postId: string;
@@ -125,20 +127,20 @@ export default function MarkdownEditor({
     setError('');
     setNotice('');
     try {
-      const response = await fetch(`/api/posts/${postId}/content`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          markdown: value,
-          text: value,
-          ...(canSetStatus ? { status } : {})
-        })
+      await updatePostContent(postId, {
+        markdown: value,
+        text: value,
+        ...(canSetStatus ? { status } : {})
       });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error((payload as { error?: string }).error || 'تعذر حفظ التعديل.');
-      }
-      const cleared = Boolean((payload as { cleared?: boolean }).cleared);
+
+      const cleared = value.trim().length === 0;
+      await logActivity({
+        action: cleared ? 'post.content.reset' : 'post.content.edit',
+        entity: 'posts',
+        entityId: postId,
+        details: { markdownLength: value.trim().length, preview: value.trim().slice(0, 120) }
+      });
+
       setNotice(cleared ? 'تم استعادة المحتوى الأصلي من الإضافة.' : 'تم حفظ التعديل.');
       onSaved?.(value);
     } catch (err) {

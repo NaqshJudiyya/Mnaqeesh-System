@@ -1,32 +1,61 @@
-import { redirect } from 'next/navigation';
-import { describeAccess } from '@/lib/session';
+'use client';
+
+import { useEffect, useState } from 'react';
+import { appPath } from '@/lib/client/paths';
+import { describeAccess } from '@/lib/client/session';
 import ConnectClient from '@/components/connect-client';
 
-export const dynamic = 'force-dynamic';
-
 /**
- * /connect — the page the extension opens to sign in.
- *
- * The extension's popup runs `chrome.tabs.create({ url: `${siteUrl}/connect` })`.
- * This page performs the Google sign-in, then hands the resulting
- * Supabase session to the extension through the bridge content script.
+ * /connect — the page the extension opens to sign in (static-hosting
+ * version: the session check that used to be a server component now runs
+ * in the browser through RLS).
  */
-export default async function ConnectPage() {
-  const access = await describeAccess();
+export default function ConnectPage() {
+  const [state, setState] = useState<'loading' | 'blocked' | 'ready'>('loading');
+  const [identity, setIdentity] = useState<{ name: string; email: string }>({ name: '', email: '' });
 
-  // Nobody signed in yet: start the Google flow, returning here after.
-  if (access.state === 'anonymous') {
-    redirect('/login?next=/connect');
-  }
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const access = await describeAccess();
+      if (cancelled) return;
 
-  if (access.state === 'no_profile') {
-    redirect('/not-authorized?reason=no_profile');
-  }
-  if (access.state === 'pending') {
-    redirect('/not-authorized?reason=pending');
-  }
-  if (access.state === 'disabled') {
-    redirect('/not-authorized?reason=disabled');
+      switch (access.state) {
+        case 'anonymous':
+          // Nobody signed in yet: start the login flow, returning here.
+          window.location.replace(appPath('/login?next=/connect'));
+          return;
+        case 'no_profile':
+          window.location.replace(appPath('/not-authorized?reason=no_profile'));
+          return;
+        case 'pending':
+          window.location.replace(appPath('/not-authorized?reason=pending'));
+          return;
+        case 'disabled':
+          window.location.replace(appPath('/not-authorized?reason=disabled'));
+          return;
+        case 'active':
+          setIdentity({
+            name: access.session.profile.full_name || access.session.email,
+            email: access.session.email
+          });
+          setState('ready');
+          return;
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (state !== 'ready') {
+    return (
+      <main className="login-shell">
+        <section className="card connect-card">
+          <p className="muted" style={{ textAlign: 'center' }}>جارٍ التحقق من الجلسة…</p>
+        </section>
+      </main>
+    );
   }
 
   return (
@@ -37,7 +66,7 @@ export default async function ConnectPage() {
           <div>
             <h1 style={{ fontSize: 20 }}>ربط الإضافة بحسابك</h1>
             <p className="muted" style={{ margin: 0 }}>
-              {access.session.profile.full_name || access.session.email}
+              {identity.name}
             </p>
           </div>
         </div>

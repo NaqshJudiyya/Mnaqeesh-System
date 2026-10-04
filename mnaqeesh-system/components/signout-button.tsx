@@ -1,6 +1,8 @@
 'use client';
 
 import { useState } from 'react';
+import { createClient } from '@/lib/supabase/client';
+import { appPath } from '@/lib/client/paths';
 
 export default function SignOutButton() {
   const [busy, setBusy] = useState(false);
@@ -8,11 +10,13 @@ export default function SignOutButton() {
   async function signOut() {
     setBusy(true);
     try {
-      await fetch('/api/auth/signout', { method: 'POST' });
+      // Signs out directly with Supabase — no server route needed on a
+      // static host. Even on failure the user is sent to the login page.
+      await createClient().auth.signOut();
     } catch {
-      // Even if the request fails, send the user to the login page.
+      // Ignore and continue to the login page.
     }
-    window.location.href = '/login';
+    window.location.href = appPath('/login');
   }
 
   return (

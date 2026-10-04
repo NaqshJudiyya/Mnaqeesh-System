@@ -115,6 +115,11 @@ export type PostFilters = {
   postKey?: string;
   from?: string;
   to?: string;
+  /**
+   * Trash view: lists SOFT-DELETED rows instead of live ones. Export never
+   * sets this, so the trash is not exportable.
+   */
+  trash?: boolean;
   page?: number;
   pageSize?: number;
   sort?: 'newest' | 'oldest';
