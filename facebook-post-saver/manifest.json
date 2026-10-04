@@ -1,0 +1,60 @@
+{
+  "manifest_version": 3,
+  "name": "Facebook Post Saver",
+  "version": "2.13.0",
+  "description": "حفظ منشورات فيسبوك مع استخراج وقت النشر الدقيق قدر الإمكان، فلاتر لكل الأعمدة، وتنزيل الوسائط بأعلى جودة متاحة، ومزامنة تلقائية مع نظام مناقيش.",
+  "permissions": [
+    "storage",
+    "unlimitedStorage",
+    "downloads",
+    "alarms"
+  ],
+  "host_permissions": [
+    "*://*.facebook.com/*",
+    "https://*.supabase.co/*",
+    "https://mnaqeesh.vercel.app/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.facebook.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "styles.css"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://mnaqeesh.vercel.app/*",
+        "https://*.vercel.app/*"
+      ],
+      "js": [
+        "manaqish-bridge.js"
+      ],
+      "run_at": "document_start"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "جدول منشورات فيسبوك المحفوظة",
+    "default_icon": {
+      "16": "icon16.png",
+      "32": "icon32.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icon16.png",
+    "32": "icon32.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  }
+}

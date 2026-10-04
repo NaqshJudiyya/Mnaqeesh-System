@@ -1,0 +1,21 @@
+# ما لا يجب رفعه إلى Vercel — Vercel تبني هذه بنفسها.
+# رفعها يجعل النشر بطيئًا وقد يسبب أخطاء بسبب روابط pnpm الرمزية.
+
+node_modules/
+.next/
+out/
+build/
+
+# ملفات محلية
+.env
+.env.local
+.env*.local
+.vercel/
+
+# ملفات مؤقتة
+*.tsbuildinfo
+tsconfig.tsbuildinfo
+*.log
+
+# لا نرفع نسخة الإضافة (ليست جزءًا من موقع Vercel)
+extension-patch/

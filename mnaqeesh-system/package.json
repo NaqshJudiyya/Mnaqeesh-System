@@ -1,0 +1,28 @@
+{
+  "name": "mnaqeesh-system",
+  "version": "1.0.0",
+  "private": true,
+  "description": "مناقيش — نظام مركزي لإدارة منشورات فيسبوك المحفوظة بواسطة إضافة Facebook Post Saver",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@supabase/ssr": "0.12.7",
+    "@supabase/supabase-js": "2.117.1",
+    "next": "16.3.8",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "24.7.2",
+    "@types/react": "19.2.2",
+    "@types/react-dom": "19.2.2",
+    "typescript": "5.9.2"
+  },
+  "engines": {
+    "node": ">=20.9.0"
+  }
+}

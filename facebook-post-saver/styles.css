@@ -1,0 +1,76 @@
+.fps-btn-wrapper {
+  --fps-green: #256f4c;
+  --fps-green-dark: #1e5c3f;
+  --fps-brown: #8c7048;
+  --fps-gold: #b59059;
+  --fps-light: #e5e5cb;
+  --fps-bg: #fafbf7;
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 9999;
+  direction: rtl;
+}
+
+.fps-save-btn {
+  font-family: -apple-system, "Segoe UI", Tahoma, Arial, sans-serif;
+  font-size: 12px;
+  line-height: 1;
+  padding: 6px 10px;
+  border-radius: 16px;
+  border: 1px solid rgba(37, 111, 76, 0.22);
+  background: var(--fps-bg);
+  color: var(--fps-green);
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(37, 111, 76, 0.13);
+  transition: background-color 0.15s ease, transform 0.1s ease, box-shadow 0.15s ease;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.fps-save-btn:hover:not(:disabled) {
+  background: var(--fps-light);
+  transform: translateY(-1px);
+  box-shadow: 0 3px 10px rgba(140, 112, 72, 0.16);
+}
+
+.fps-save-btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.fps-save-btn:disabled {
+  cursor: default;
+  opacity: 0.88;
+}
+
+.fps-save-btn[data-state="saved"] {
+  background: #edf5ef;
+  border-color: var(--fps-green);
+  color: var(--fps-green);
+}
+
+.fps-check-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-left: 4px;
+  border-radius: 50%;
+  background: var(--fps-green);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.fps-save-btn[data-state="saving"] {
+  background: #f7efdF;
+  border-color: var(--fps-gold);
+  color: var(--fps-brown);
+}
+
+.fps-save-btn[data-state="error"] {
+  background: #f7e9e5;
+  border-color: #9a4a3a;
+  color: #7e2f22;
+}

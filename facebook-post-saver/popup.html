@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Facebook Post Saver</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header class="fps-header">
+    <div class="fps-title-row">
+      <div class="fps-brand">
+        <img src="icon32.png" alt="" class="fps-brand-icon">
+        <div>
+          <h1>منشورات فيسبوك المحفوظة</h1>
+          <div class="fps-subtitle">إدارة المنشورات والتصدير مع تنزيل الوسائط</div>
+        </div>
+      </div>
+      <div class="fps-header-actions">
+        <span id="fps-count" class="fps-count">0 منشور</span>
+        <button id="fps-open-tab" class="fps-icon-btn" type="button" title="فتح الجدول في تبويب كامل" aria-label="فتح الجدول في تبويب كامل">↗</button>
+      </div>
+    </div>
+
+    <div class="fps-toolbar">
+      <input id="fps-search" type="search" placeholder="ابحث باسم الحساب أو النص..." autocomplete="off" />
+
+      <div class="fps-export-group" title="تقسيم ملفات التصدير">
+        <span class="fps-export-label">التصدير:</span>
+        <select id="fps-export-mode" aria-label="طريقة تقسيم التصدير">
+          <option value="all">ملف واحد — الكل</option>
+          <option value="year">ملف لكل سنة</option>
+          <option value="month">ملف لكل شهر</option>
+        </select>
+      </div>
+
+      <button id="fps-export-xlsx" type="button">⬇ Excel</button>
+      <button id="fps-export-json" type="button">⬇ JSON</button>
+      <button id="fps-export-md" type="button">⬇ MD</button>
+      <button id="fps-export-wp" type="button">⬇ WordPress</button>
+      <label class="fps-import-label">
+        ⬆ استيراد JSON
+        <input id="fps-import-input" type="file" accept="application/json,.json" hidden />
+      </label>
+    </div>
+
+    <div id="fps-status" class="fps-status" role="status" aria-live="polite"></div>
+  </header>
+
+  <main class="fps-table-wrapper">
+    <table id="fps-table">
+      <thead>
+        <tr>
+          <th>
+            <div class="fps-th-with-filter">
+              <span>#</span>
+              <input id="fps-filter-number" class="fps-col-filter fps-col-input fps-number-filter" inputmode="numeric" type="number" min="1" step="1" placeholder="الرقم" aria-label="فلترة رقم المنشور" title="فلترة رقم المنشور">
+            </div>
+          </th>
+          <th>
+            <div class="fps-th-with-filter">
+              <span>اسم الحساب</span>
+              <select id="fps-filter-author" class="fps-col-filter" aria-label="فلترة اسم الحساب" title="فلترة اسم الحساب">
+                <option value="">الكل</option>
+              </select>
+            </div>
+          </th>
+          <th>
+            <div class="fps-th-with-filter">
+              <span>التاريخ</span>
+              <input id="fps-filter-date" class="fps-col-filter fps-col-input" type="search" placeholder="بحث" aria-label="فلترة التاريخ" title="فلترة التاريخ">
+            </div>
+          </th>
+          <th>
+            <div class="fps-th-with-filter">
+              <span>الوقت</span>
+              <input id="fps-filter-time" class="fps-col-filter fps-col-input" type="search" placeholder="بحث" aria-label="فلترة الوقت" title="فلترة الوقت">
+            </div>
+          </th>
+          <th>
+            <div class="fps-th-with-filter">
+              <span>جمهور المنشور</span>
+              <select id="fps-filter-privacy" class="fps-col-filter" aria-label="فلترة جمهور المنشور" title="فلترة جمهور المنشور">
+                <option value="">الكل</option>
+              </select>
+            </div>
+          </th>
+          <th>
+            <div class="fps-th-with-filter">
+              <span>نصوص المنشور</span>
+              <input id="fps-filter-text" class="fps-col-filter fps-col-input" type="search" placeholder="بحث" aria-label="فلترة نص المنشور" title="فلترة نص المنشور">
+            </div>
+          </th>
+          <th>
+            <div class="fps-th-with-filter">
+              <span>رابط الصورة / الصور</span>
+              <select id="fps-filter-images" class="fps-col-filter" aria-label="فلترة وجود روابط الصور" title="فلترة وجود روابط الصور">
+                <option value="">الكل</option>
+                <option value="has">يوجد رابط</option>
+                <option value="none">لا يوجد رابط</option>
+              </select>
+            </div>
+          </th>
+          <th>
+            <div class="fps-th-with-filter">
+              <span>رابط الفيديو</span>
+              <select id="fps-filter-video" class="fps-col-filter" aria-label="فلترة وجود رابط الفيديو" title="فلترة وجود رابط الفيديو">
+                <option value="">الكل</option>
+                <option value="has">يوجد رابط</option>
+                <option value="none">لا يوجد رابط</option>
+              </select>
+            </div>
+          </th>
+          <th>
+            <div class="fps-th-with-filter">
+              <span>رابط المنشور</span>
+              <select id="fps-filter-post" class="fps-col-filter" aria-label="فلترة وجود رابط المنشور" title="فلترة وجود رابط المنشور">
+                <option value="">الكل</option>
+                <option value="has">يوجد رابط</option>
+                <option value="none">لا يوجد رابط</option>
+              </select>
+            </div>
+          </th>
+        </tr>
+      </thead>
+      <tbody id="fps-table-body"></tbody>
+    </table>
+
+    <div id="fps-empty-state" class="fps-empty-state">
+      لا توجد منشورات محفوظة بعد. افتح فيسبوك واضغط «📥 حفظ» فوق المنشور.
+    </div>
+  </main>
+
+  <script src="zip-writer.js"></script>
+  <script src="xlsx-writer.js"></script>
+  <script src="popup.js"></script>
+  <script src="manaqish-popup.js"></script>
+</body>
+</html>
