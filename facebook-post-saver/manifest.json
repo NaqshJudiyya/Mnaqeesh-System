@@ -12,6 +12,7 @@
   "host_permissions": [
     "*://*.facebook.com/*",
     "https://*.supabase.co/*",
+    "https://naqshjudiyya.github.io/*",
     "https://mnaqeesh.vercel.app/*"
   ],
   "background": {
@@ -32,6 +33,7 @@
     },
     {
       "matches": [
+        "https://naqshjudiyya.github.io/*",
         "https://mnaqeesh.vercel.app/*",
         "https://*.vercel.app/*"
       ],

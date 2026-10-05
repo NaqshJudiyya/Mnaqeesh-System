@@ -27,29 +27,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Reads the pnpm version from package.json "packageManager".
+      - uses: pnpm/action-setup@v4
+
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
-
-      # The repo carries pnpm-lock.yaml; corepack provides pnpm.
-      - name: Enable pnpm
-        run: corepack enable
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: mnaqeesh-system/pnpm-lock.yaml
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
       # The static export INLINES these public values into the client bundle
-      # at build time, so they must be present during the build. Add them as
-      # repository secrets (both are public-by-design — see HOSTING.md).
+      # at build time. The `secrets.X || 'fallback'` expressions mean the
+      # deploy works even with no repository secrets configured: the
+      # fallbacks are the same public-by-design values that already ship
+      # inside the extension (facebook-post-saver/manaqish-config.js) —
+      # data access is guarded by Supabase RLS, not by hiding these.
+      # Add the two secrets to override the fallbacks.
       - name: Build static export
         run: pnpm build
         env:
-          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
-          NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY }}
-          # For a PROJECT site (https://<user>.github.io/<repo>/) set the
-          # base path to /<repo-name>. For a user site or a custom domain
-          # leave it out.
-          # NEXT_PUBLIC_BASE_PATH: /your-repo-name
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL || 'https://czgxygcjyvfkhsuoearu.supabase.co' }}
+          NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || 'sb_publishable_JBJ1FJyDVcEzu4loUl6qNQ_jMgYq1jU' }}
+          # This repo IS a PROJECT site: Pages serves it under
+          # https://naqshjudiyya.github.io/Mnaqeesh-System/ — the base path
+          # below MUST equal the repository name exactly (case included).
+          NEXT_PUBLIC_BASE_PATH: /Mnaqeesh-System
 
       - name: Disable Jekyll processing
         run: touch out/.nojekyll

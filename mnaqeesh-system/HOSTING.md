@@ -49,8 +49,9 @@
 # من داخل مجلد mnaqeesh-system (يتطلب تسجيل الدخول بـ supabase login أول مرة)
 supabase functions deploy admin-members --project-ref czgxygcjyvfkhsuoearu
 
-# النطاقات المسموح لها باستدعاء الدالة (ضع نطاق موقعك/مواقعك)
-supabase secrets set ALLOWED_ORIGINS="https://YOUR-SITE-URL"
+# النطاقات المسموح لها باستدعاء الدالة (أصول مفصولة بفواصل — بدون مسارات):
+# نطاق GitHub Pages + نطاق Vercel القديم (احذفه إن أوقفت نشر Vercel نهائيًا)
+supabase secrets set ALLOWED_ORIGINS="https://naqshjudiyya.github.io,https://mnaqeesh.vercel.app"
 ```
 
 مفاتيح `SUPABASE_URL` و`SUPABASE_SERVICE_ROLE_KEY` تُحقن تلقائيًا في الدالة عند
@@ -68,21 +69,30 @@ pnpm build                   # ينتج مجلد out/ جاهزًا للنشر
 
 ---
 
-## الخيار أ — GitHub Pages
+## الخيار أ — GitHub Pages ✅ (الإعداد الحالي لهذا المستودع)
 
-1. ارفع المستودع إلى GitHub، ثم أضف **سرّين على مستوى المستودع**
-   (Settings → Secrets and variables → Actions → New repository secret) —
-   هما مطلوبان وقت البناء لأن قيمهما تُحقن في ملفات الموقع:
-   - `NEXT_PUBLIC_SUPABASE_URL` → `https://czgxygcjyvfkhsuoearu.supabase.co`
-   - `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` → المفتاح العام (نفسه الموجود في الإضافة)
-2. من إعدادات المستودع: **Settings → Pages → Source: GitHub Actions**.
-3. الـ workflow الجاهز `.github/workflows/deploy-pages.yml` يبني وينشر تلقائيًا
-   مع كل push على `main` (يمكن تشغيله يدويًا من تبويب Actions).
-4. **مهم — عنوان الموقع:**
-   - حساب/مستخدم: `https://<user>.github.io/` → لا شيء إضافي.
-   - مشروع: `https://<user>.github.io/<repo>/` → في خطوة
-     «Build static export» داخل الـ workflow فعّل سطر
-     `NEXT_PUBLIC_BASE_PATH: /<repo>` (أزل `#` واكتب اسم مستودعك).
+المستودع `NaqshJudiyya/Mnaqeesh-System` جاهز للنشر كما هو — الـ workflow
+`.github/workflows/deploy-pages.yml` مضبوط بالكامل:
+
+- **مسار القاعدة (Base path)** مضبوط على `/Mnaqeesh-System` لأن هذا مستودع
+  مشروع (Project site) يُخدم تحت `https://naqshjudiyya.github.io/Mnaqeesh-System/`.
+  > ⚠️ لو غيّرت اسم المستودع يومًا: حدّث `NEXT_PUBLIC_BASE_PATH` في الـ workflow
+  > ليطابق الاسم الجديد **بنفس حالة الأحرف**، وإلا ظهرت صفحة بيضاء.
+- **قيم Supabase** تُحقن وقت البناء، ومعها قيم احتياطية مكتوبة داخل الـ workflow
+  (نفس القيم العامة الموجودة داخل الإضافة — آمنة بالتصميم لأن الحماية كلها في
+  RLS). النتيجة: النشر يعمل حتى لو لم تضف أي أسرار. ولإضافة أسرار رسمية
+  (اختياري): Settings → Secrets and variables → Actions:
+  - `NEXT_PUBLIC_SUPABASE_URL` → `https://czgxygcjyvfkhsuoearu.supabase.co`
+  - `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` → المفتاح العام (نفسه في الإضافة)
+
+الخطوة الوحيدة المطلوبة منك مرة واحدة (لا يمكن ضبطها من الملفات):
+
+> **Settings → Pages → Build and deployment → Source: اختر «GitHub Actions»**
+
+بعدها كل push على `main` (يغيّر `mnaqeesh-system/` أو الـ workflow) يبني وينشر
+تلقائيًا، أو شغّله يدويًا من تبويب Actions → «Deploy مناقيش to GitHub Pages» →
+Run workflow. عنوان الموقع النهائي:
+**https://naqshjudiyya.github.io/Mnaqeesh-System/**
 
 ## الخيار ب — Firebase Hosting
 
@@ -103,33 +113,34 @@ firebase deploy --only hosting
 
 ---
 
-## الخطوة 4 — اربط Supabase بالنطاق الجديد
+## الخطوة 4 — اربط Supabase بالنطاق الجديد (مطلوب مرة واحدة)
 
 في Supabase → **Authentication → URL Configuration**:
 
-- **Site URL**: نطاق موقعك الأساسي (مثال: `https://<user>.github.io` أو نطاق Firebase).
-- **Redirect URLs**: أضف لكل نطاق:
+- **Site URL**: `https://naqshjudiyya.github.io/Mnaqeesh-System`
+- **Redirect URLs** — أضف الأربعة (بالمسار وبالشرطة المائلة، لأن Google يعيد
+  المستخدم إلى `/login` ثم المتصفح يحوّلها إلى `/login/`):
   ```
-  https://YOUR-SITE-URL/login
-  https://YOUR-SITE-URL/connect
+  https://naqshjudiyya.github.io/Mnaqeesh-System/login
+  https://naqshjudiyya.github.io/Mnaqeesh-System/login/
+  https://naqshjudiyya.github.io/Mnaqeesh-System/connect
+  https://naqshjudiyya.github.io/Mnaqeesh-System/connect/
   ```
 
 لاحظ أن العودة من Google صارت إلى `/login` مباشرة (المتصفح يبادل رمز PKCE بنفسه) —
 لم تعد هناك صفحة `/auth/callback` على السيرفر.
 
-## الخطوة 5 — وجّه الإضافة للنطاق الجديد
+## الخطوة 5 — وجّه الإضافة للنطاق الجديد ✅ (منفّذة في هذا المستودع)
 
-عدّل ملفين في الإضافة ثم أعد توزيعها:
+الملفات الثلاثة معدّلة فعلًا وأنتظرتها معك في المستودع:
 
-1. `manaqish-config.js`:
-   ```js
-   siteUrl: 'https://YOUR-SITE-URL',
-   ```
-2. `manaqish-bridge.js` — ضع نطاقك في القائمة:
-   ```js
-   const MANAQISH_ALLOWED_HOSTS = ['your-site-host'];
-   ```
-   وفعّل مطابقة النطاق في `manifest.json` لملف الجسر.
+1. `manaqish-config.js` → `siteUrl: 'https://naqshjudiyya.github.io/Mnaqeesh-System'`
+2. `manaqish-bridge.js` → `MANAQISH_ALLOWED_HOSTS` فيها `naqshjudiyya.github.io` (ومعها نطاق Vercel القديم توافقًا)
+3. `manifest.json` → نطاق `https://naqshjudiyya.github.io/*` في `host_permissions`
+   وفي `content_scripts` لملف الجسر
+
+الوحيد المتبقي: بعد مزامنة الملفات على أي جهاز فيه الإضافة —
+`chrome://extensions` → زر التحديث (↻) على «Facebook Post Saver».
 
 بقية ملفات الإضافة لا تُلمس إطلاقًا.
 
@@ -152,4 +163,7 @@ firebase deploy --only hosting
 - **«إضافة عضو يدويًا» لا تعمل**: خطوة نشر Edge Function لم تُنفذ أو `ALLOWED_ORIGINS` لا يطابق نطاق موقعك.
 - **فشل تسجيل الدخول بجوجل**: أضف نطاق موقعك في **Redirect URLs** (الخطوة 4).
 - **الإضافة تفتح صفحة الاتصال لكنها تفشل**: `siteUrl` في `manaqish-config.js` لا يطابق نطاق النشر، أو النطاق ليس في `MANAQISH_ALLOWED_HOSTS`.
-- **صفحة بيضاء على GitHub Pages بموقع مشروع**: نسيت `NEXT_PUBLIC_BASE_PATH`.
+- **صفحة بيضاء على GitHub Pages بموقع مشروع**: القيمة مضبوطة أصلًا في الـ workflow
+  (`NEXT_PUBLIC_BASE_PATH: /Mnaqeesh-System`) — تظهر المشكلة فقط لو تغيّر اسم
+  المستودع دون تحديث هذه القيمة بنفس حالة الأحرف، أو لو لم تضبط Pages على
+  Source: GitHub Actions.

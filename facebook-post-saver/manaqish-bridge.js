@@ -17,10 +17,11 @@
 // =====================================================================
 
 // ✅ مضبوطة على موقعك — لن تحتاج تعديلها.
-// استخدم دائمًا النطاق الرسمي https://mnaqeesh.vercel.app
-// ولا تستخدم روابط المعاينة (mnaqeesh-xxxx-….vercel.app) لأنها محمية
-// بـ Vercel SSO وتتغير مع كل نشر.
+// النطاق الرسمي الحالي: صفحة المشروع على GitHub Pages (naqshjudiyya.github.io).
+// نطاق Vercel القديم بقي في القائمة توافقًا مع أي نشر قديم ما زال يعمل.
+// روابط المعاينة الأخرى (mnaqeesh-xxxx-….vercel.app) تُرفض لأنها ليست هنا.
 const MANAQISH_ALLOWED_HOSTS = [
+  'naqshjudiyya.github.io',
   'mnaqeesh.vercel.app'
 ];
 

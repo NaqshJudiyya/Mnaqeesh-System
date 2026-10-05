@@ -12,7 +12,9 @@
 // =====================================================================
 const MANAQISH_CONFIG = {
   // موقع «مناقيش» المنشور — الإضافة تفتح {siteUrl}/connect لتسجيل الدخول.
-  siteUrl: 'https://mnaqeesh.vercel.app',
+  // موقع مشروع على GitHub Pages: يُخدم تحت /Mnaqeesh-System (اسم المستودع)
+  // — لا تحذف المسار من العنوان وإلا فتحت الإضافة صفحة 404.
+  siteUrl: 'https://naqshjudiyya.github.io/Mnaqeesh-System',
 
   // مشروعك على Supabase — لا تغيّره.
   apiUrl: 'https://czgxygcjyvfkhsuoearu.supabase.co',

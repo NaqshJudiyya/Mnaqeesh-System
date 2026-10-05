@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "description": "مناقيش — نظام مركزي لإدارة منشورات فيسبوك المحفوظة بواسطة إضافة Facebook Post Saver",
+  "packageManager": "pnpm@11.7.0",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
